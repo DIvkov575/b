@@ -3,9 +3,13 @@
 ## Overview
 
 Research conducted June 2026 to identify a novel, compute-feasible generative biomolecule project.
-Constraints: 1 GPU, no large-scale training, publishable at ML venue.
+Constraints: 1 GPU (Apple Silicon M3/M4 Max, no guaranteed A100), publishable at ML venue.
 
-**Selected Project:** Dirichlet Flow Matching for Protein Inverse Folding
+**Selected Project:** Specificity-Aware Design (NOT operator) — with 48-hour kill gate, fallback to Multi-State Design
+
+**Previous selections (superseded by council review):**
+- Dirichlet FM for Inverse Folding (abandoned: compute uncertainty, training time unknown)
+- Latent Dynamics (abandoned: requires A100, reconstruction fidelity risk too high for solo researcher)
 
 ---
 
@@ -13,9 +17,10 @@ Constraints: 1 GPU, no large-scale training, publishable at ML venue.
 
 1. [Landscape Survey](#1-landscape-survey)
 2. [Evaluated Projects](#2-evaluated-projects)
-3. [Selected Project: Dirichlet FM for Inverse Folding](#3-selected-project-dirichlet-fm-for-inverse-folding)
+3. [Previously Selected: Dirichlet FM for Inverse Folding](#3-selected-project-dirichlet-fm-for-inverse-folding)
 4. [Rejected Projects with Rationale](#4-rejected-projects-with-rationale)
 5. [Key References](#5-key-references)
+6. [Council Review Findings](#6-council-review-findings)
 
 ---
 
@@ -407,6 +412,55 @@ Output: Amino acid probabilities per residue ∈ Δ^19
 - Jian et al. (2024) "BADGER" — affinity-guided small molecule diffusion (arXiv:2406.16821)
 - Hartman et al. (Nov 2025) "Feynman-Kac Steering" — particle-based guidance for RFdiffusion (arXiv:2511.09216)
 - Cremer et al. (Oct 2025) "FLOWR.root" — joint ligand generation + affinity (arXiv:2510.02578)
+
+---
+
+## 6. Council Review Findings
+
+### Council 1: Latent Dynamics Evaluation (June 2026)
+
+**Verdict:** Proceed with changes, medium confidence.
+
+**Unanimous findings:**
+- Reconstruction fidelity is THE project, not a risk to manage
+- 3.6TB data is operationally brutal for single-GPU researcher
+- Novelty window narrowing (MIT/Noé/MSRA likely pursuing)
+- Evaluation circularity: MD is both training data and benchmark
+
+**Key insight:** The hidden assumption — that slow collective motions are capturable by a small encoder — is untested and possibly false. Labs with 8-64 GPUs are pursuing this.
+
+**Recommendation:** 2-week autoencoder gate on 500-domain subset. If sub-1.5Å RMSD fails, pivot.
+
+### Council 2: Full Project Comparison (June 2026)
+
+**Verdict:** Start with #2 (Specificity-Aware Design), medium confidence.
+
+**Unanimous findings:**
+- Eliminate A100 projects (Latent Dynamics, Coevolution, Evolutionary Flow) — solo laptop researcher cannot compete
+- D's kill-gate execution structure is correct — 48-hour baseline test before committing
+- Real choice is #2 (Specificity) vs #5 (Multi-State)
+- MPS backend compatibility is a HARD GATE — must verify day 1
+
+**Key disagreements:**
+- Is #2's trivial baseline fatal? → Empirically decidable in 48 hours
+- Is #5's 100-example dataset sufficient? → Addressable through method design (augmentation, transfer)
+
+**Critical blind spot identified:** Biological validation. Top ML reviewers demand evidence outputs are plausible. Need collaborator or rigorous in-silico validation pipeline.
+
+**Final execution plan:**
+1. Day 1: MPS verification — run pretrained checkpoint, compare against CPU reference (L2 < 1e-4)
+2. Day 2-3: Kill gate — naive docking-score subtraction baseline. If NOT operator doesn't beat by >10%, pivot to #5
+3. Week 1: Secure validation pathway (AutoDock Vina or DiffDock pipeline)
+4. If #2 survives: frame as "Compositional Diffusion Guidance for Molecular Design" (methodology, not application)
+5. If #2 fails: pivot to Multi-State Design (#5)
+
+### Key Strategic Insights from Both Councils
+
+1. **Execution risk > scoop risk** for a solo laptop researcher
+2. **"Time-to-first-negative-result"** is the correct optimization target
+3. **Frame methodology, not application** — "Compositional Guidance Algebra" is a stronger paper than "NOT for kinases"
+4. **The benchmark angle** — whichever project ships, releasing evaluation protocol/data splits as a community resource maximizes citation impact
+5. **Apple Silicon MPS is a hard constraint** — silent numerical errors in geometric DL can waste months
 
 ---
 
