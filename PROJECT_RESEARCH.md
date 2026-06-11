@@ -5,11 +5,15 @@
 Research conducted June 2026 to identify a novel, compute-feasible generative biomolecule project.
 Constraints: 1 GPU (Apple Silicon M3/M4 Max, no guaranteed A100), publishable at ML venue.
 
-**Selected Project:** Specificity-Aware Design (NOT operator) — with 48-hour kill gate, fallback to Multi-State Design
+**Selected Project:** Multi-Target Binder Design — generating a single protein that binds multiple targets simultaneously via RFdiffusion dual-hotspot conditioning (inference-only, no retraining)
 
-**Previous selections (superseded by council review):**
-- Dirichlet FM for Inverse Folding (abandoned: compute uncertainty, training time unknown)
-- Latent Dynamics (abandoned: requires A100, reconstruction fidelity risk too high for solo researcher)
+**Previous selections (all superseded after rigorous lit review):**
+- Specificity-Aware Design / NOT operator (abandoned: ActivityDiff 2025 does the same thing)
+- Dirichlet FM for Inverse Folding (abandoned: Tang 2025 solved scaling; ADFLIP does inverse folding with flow)
+- Latent Dynamics (abandoned: DynaFold Sep 2025, GLDP, ConfRover all published the same idea)
+- Multi-State Design (abandoned: DynamicMPNN + ADFLIP July 2025)
+- Evolutionary Flow (abandoned: PEINT Feb 2026)
+- Learning from Failures (abandoned: 6+ DPO papers 2025-2026)
 
 ---
 
