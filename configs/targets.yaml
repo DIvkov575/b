@@ -1,0 +1,12 @@
+pairs:
+  - name: "ubiquitin_sumo"
+    target_a:
+      pdb: "tests/fixtures/ubiquitin.pdb"
+      chain: "A"
+      hotspots: [8, 44, 48, 63, 68]
+    target_b:
+      pdb: "tests/fixtures/sumo.pdb"
+      chain: "A"
+      hotspots: [35, 37, 39, 55, 57]
+    separation: 60.0
+    binder_length: [100, 150]
