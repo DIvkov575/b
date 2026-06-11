@@ -1,0 +1,16 @@
+binder:
+  min_length: 80
+  max_length: 150
+
+generation:
+  num_designs: 50000
+  diffusion_steps: 50
+
+filtering:
+  min_contacts_per_target: 5
+  contact_distance_threshold: 8.0
+
+evaluation:
+  pae_interaction_threshold: 10.0
+  max_steric_clashes: 5
+  clash_distance: 2.0
