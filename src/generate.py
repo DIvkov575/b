@@ -45,7 +45,7 @@ def parse_output_pdbs(output_dir: str) -> list:
 
 
 def generate_mock_designs(output_dir: str, combined_pdb: str, num_designs: int = 10) -> list:
-    from Bio.PDB import Structure, Model, Chain, Residue, Atom
+    from Bio.PDB import Structure, Model, Chain, Residue, Atom, PDBIO
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -70,7 +70,6 @@ def generate_mock_designs(output_dir: str, combined_pdb: str, num_designs: int =
             res.add(atom)
             chain.add(res)
 
-        from Bio.PDB import PDBIO
         io = PDBIO()
         io.set_structure(struct)
         io.save(str(output_path / f"design_{i}.pdb"))
