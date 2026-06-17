@@ -7,7 +7,7 @@ from src.training.margin_utils import compute_margin
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
-    # MPS disabled: PyG 2.6.1 GINConv.propagate() has device mismatch bugs on MPS
+    # MPS adds transfer overhead for batch_size=1 subgraph GNNs; CPU + parallel is faster
     return torch.device("cpu")
 
 
@@ -28,12 +28,12 @@ class Trainer:
         n = 0
 
         for graph in loader:
-            graph = graph.to(self.device)
             self.optimizer.zero_grad()
             logits, info = self.model(graph, return_margin_info=True)
             label = graph.y if hasattr(graph, "y") else graph["y"]
             if label.dim() == 0:
                 label = label.unsqueeze(0)
+            label = label.to(logits.device)
 
             logits_2d = logits.unsqueeze(0) if logits.dim() == 1 else logits
             cls_loss = classification_loss(logits_2d, label, task=self.task)
@@ -69,13 +69,13 @@ class Trainer:
 
         with torch.no_grad():
             for graph in loader:
-                graph = graph.to(self.device)
                 logits = self.model(graph)
                 if isinstance(logits, tuple):
                     logits = logits[0]
                 label = graph.y if hasattr(graph, "y") else graph["y"]
                 if label.dim() == 0:
                     label = label.unsqueeze(0)
+                label = label.to(logits.device)
 
                 logits_2d = logits.unsqueeze(0) if logits.dim() == 1 else logits
 

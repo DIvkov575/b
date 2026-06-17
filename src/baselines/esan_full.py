@@ -29,7 +29,7 @@ class ESANFull(nn.Module):
                 return logits, {"n_subgraphs": 0, "selected_indices": [], "quality_scores": torch.zeros(0)}
             return logits
 
-        device = data.x.device
+        device = next(self.parameters()).device
         batch = Batch.from_data_list([strip_subgraph(s) for s in subgraphs]).to(device)
         subgraph_embeddings = self.encoder(batch)
         bag_emb = subgraph_embeddings.mean(dim=0)

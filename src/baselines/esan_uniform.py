@@ -36,7 +36,7 @@ class ESANUniform(nn.Module):
         k = min(self.budget_k, len(subgraphs))
         sampled = random.sample(subgraphs, k)
 
-        device = data.x.device
+        device = next(self.parameters()).device
         batch = Batch.from_data_list([strip_subgraph(s) for s in sampled]).to(device)
         subgraph_embeddings = self.encoder(batch)
         bag_emb = subgraph_embeddings.mean(dim=0)

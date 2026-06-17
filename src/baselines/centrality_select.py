@@ -52,7 +52,7 @@ class CentralitySelect(nn.Module):
         topk_idx = torch.topk(scores_tensor, k=k).indices.tolist()
 
         selected = [subgraphs[i] for i in topk_idx]
-        device = data.x.device
+        device = next(self.parameters()).device
         batch = Batch.from_data_list([strip_subgraph(s) for s in selected]).to(device)
         subgraph_embeddings = self.encoder(batch)
 

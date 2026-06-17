@@ -66,7 +66,7 @@ class DPPSubgraphGNN(nn.Module):
                 return logits, info
             return logits
 
-        device = data.x.device
+        device = next(self.parameters()).device
         batch = Batch.from_data_list([strip_subgraph(s) for s in subgraphs]).to(device)
         subgraph_embeddings = self.encoder(batch)
 
