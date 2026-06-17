@@ -42,8 +42,10 @@ class DPPSelector(nn.Module):
             L_cross = L_reg.index_select(0, rem_idx).index_select(1, sel_idx)
             diag_rem = torch.diag(L_reg).index_select(0, rem_idx)
 
-            L_sel_inv = torch.linalg.inv(L_sel)
+            L_sel_reg = L_sel + 1e-6 * torch.eye(L_sel.shape[0], device=device, dtype=L_sel.dtype)
+            L_sel_inv = torch.linalg.inv(L_sel_reg)
             gains = diag_rem - torch.sum((L_cross @ L_sel_inv) * L_cross, dim=1)
+            gains = gains.clamp(min=0.0)
 
             best_local = int(torch.argmax(gains).item())
             best_global = int(rem_idx[best_local].item())
