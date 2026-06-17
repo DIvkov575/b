@@ -46,6 +46,7 @@ class CachedModel:
         self.method = method
         self.budget_k = budget_k
         self.hidden_dim = hidden_dim
+        self._training = True
 
         self.encoder = GINEncoder(in_dim, hidden_dim, hidden_dim, num_layers=num_layers)
         self.aggregator = BagAggregator(hidden_dim, aggregation)
@@ -92,12 +93,13 @@ class CachedModel:
             if self.method == "uniform":
                 selected.append(random.sample(subs, k))
             elif self.method == "centrality":
-                # Degree centrality: pick subgraphs from highest-degree deleted nodes
+                # Degree centrality: pick subgraphs where the DELETED node had highest degree
+                # Subgraph with FEWER edges = deleted a high-degree node = more informative
                 scores = []
                 for s in subs:
                     n_edges = s.edge_index.shape[1] if s.edge_index.numel() > 0 else 0
                     scores.append(n_edges)
-                topk = sorted(range(len(subs)), key=lambda i: scores[i], reverse=True)[:k]
+                topk = sorted(range(len(subs)), key=lambda i: scores[i])[:k]
                 selected.append([subs[i] for i in topk])
             elif self.method in ("full", "dpp"):
                 selected.append(subs[:k] if self.method == "full" else subs)
@@ -148,20 +150,36 @@ class CachedModel:
                 quality_scores_list.append(qs)
 
                 if self._training:
-                    soft_weights = self.dpp_selector.soft_select(embs, qs)
-                    graph_reprs.append(self.aggregator(embs, soft_weights))
+                    marginals = self.dpp_selector.soft_select(embs, qs)
+                    w = marginals / marginals.sum().clamp(min=1e-8)
+                    graph_reprs.append(self.aggregator(embs, w))
                 else:
                     selected = self.dpp_selector(embs.detach(), qs.detach())
                     sel_embs = embs[torch.tensor(selected, dtype=torch.long)]
-                    w = torch.ones(len(selected))
+                    w = torch.ones(len(selected)) / max(len(selected), 1)
                     graph_reprs.append(self.aggregator(sel_embs, w))
             else:
-                w = torch.ones(embs.shape[0])
+                w = torch.ones(embs.shape[0]) / max(embs.shape[0], 1)
                 graph_reprs.append(self.aggregator(embs, w))
                 quality_scores_list.append(torch.zeros(0))
 
         logits = self.classifier(torch.stack(graph_reprs))
         return logits, quality_scores_list
+
+
+def _eval_mae(model, cache, labels, budget_k, batch_size=32):
+    """Evaluate MAE in batches to avoid OOM."""
+    total_ae = 0.0
+    total_n = 0
+    with torch.no_grad():
+        for i in range(0, len(cache), batch_size):
+            batch_subs = cache[i:i + batch_size]
+            batch_labels = torch.cat(labels[i:i + batch_size])
+            logits, _ = model.forward_batch(batch_subs, batch_labels)
+            if logits is not None:
+                total_ae += torch.abs(logits.view(-1) - batch_labels.view(-1).float()).sum().item()
+                total_n += batch_labels.numel()
+    return total_ae / max(total_n, 1)
 
 
 def train_one_model(method, in_dim, hidden_dim, out_dim, num_layers, budget_k,
@@ -215,24 +233,12 @@ def train_one_model(method, in_dim, hidden_dim, out_dim, num_layers, budget_k,
             cls_total += cls_loss.item()
             n_batches += 1
 
-        # Evaluate
+        # Evaluate (batched to avoid OOM)
         model.eval()
-        with torch.no_grad():
-            val_logits, _ = model.forward_batch(val_cache, torch.cat(val_labels))
-            if val_logits is not None:
-                val_mae = torch.abs(val_logits.view(-1) - torch.cat(val_labels).view(-1).float()).mean().item()
-            else:
-                val_mae = float("inf")
-
+        val_mae = _eval_mae(model, val_cache, val_labels, budget_k, batch_size)
         if val_mae < best_val:
             best_val = val_mae
-            # Evaluate test
-            with torch.no_grad():
-                test_logits, _ = model.forward_batch(test_cache, torch.cat(test_labels))
-                if test_logits is not None:
-                    test_mae = torch.abs(test_logits.view(-1) - torch.cat(test_labels).view(-1).float()).mean().item()
-                else:
-                    test_mae = float("inf")
+            test_mae = _eval_mae(model, test_cache, test_labels, budget_k, batch_size)
             best_test = {"mae": test_mae, "epoch": epoch}
 
         if epoch % 10 == 0:

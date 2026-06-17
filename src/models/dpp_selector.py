@@ -11,53 +11,69 @@ class DPPSelector(nn.Module):
         self.temperature = temperature
 
     def _build_L_kernel(self, embeddings, quality_scores):
-        q = F.softplus(quality_scores)
+        q = F.softplus(quality_scores).clamp(max=20.0)
         normalized = F.normalize(embeddings, p=2, dim=-1)
         S = normalized @ normalized.T
         L = q.unsqueeze(1) * S * q.unsqueeze(0)
         return L
 
     def forward(self, embeddings, quality_scores):
+        """Greedy MAP DPP via Cholesky-based incremental updates (numerically stable)."""
         n = embeddings.shape[0]
         if n <= self.budget_k:
             return list(range(n))
 
         L = self._build_L_kernel(embeddings, quality_scores)
-        device = L.device
-        eye = torch.eye(n, device=device, dtype=L.dtype) * 1e-6
-        L_reg = L + eye
+        diag_L = torch.diag(L).clone()
 
         selected: list[int] = []
-        remaining = set(range(n))
+        # Cholesky rows for incremental Schur complement
+        chol_rows = torch.zeros(self.budget_k, n, device=L.device, dtype=L.dtype)
+        remaining = torch.ones(n, dtype=torch.bool, device=L.device)
 
-        first = int(torch.argmax(torch.diag(L)).item())
-        selected.append(first)
-        remaining.remove(first)
+        for t in range(self.budget_k):
+            # Conditional gains = diag_L (updated in place)
+            gains = diag_L.clone()
+            gains[~remaining] = -float("inf")
 
-        while len(selected) < self.budget_k and remaining:
-            sel_idx = torch.tensor(selected, device=device, dtype=torch.long)
-            rem_idx = torch.tensor(sorted(remaining), device=device, dtype=torch.long)
+            if gains.max() <= 0:
+                break
 
-            L_sel = L_reg.index_select(0, sel_idx).index_select(1, sel_idx)
-            L_cross = L_reg.index_select(0, rem_idx).index_select(1, sel_idx)
-            diag_rem = torch.diag(L_reg).index_select(0, rem_idx)
+            best = int(gains.argmax().item())
+            selected.append(best)
+            remaining[best] = False
 
-            L_sel_reg = L_sel + 1e-6 * torch.eye(L_sel.shape[0], device=device, dtype=L_sel.dtype)
-            L_sel_inv = torch.linalg.inv(L_sel_reg)
-            gains = diag_rem - torch.sum((L_cross @ L_sel_inv) * L_cross, dim=1)
-            gains = gains.clamp(min=0.0)
+            # Update Cholesky factor
+            if t == 0:
+                chol_rows[0, best] = torch.sqrt(diag_L[best].clamp(min=1e-10))
+            else:
+                prev_chol = chol_rows[:t, best]
+                chol_rows[t, best] = torch.sqrt((diag_L[best] - prev_chol @ prev_chol).clamp(min=1e-10))
 
-            best_local = int(torch.argmax(gains).item())
-            best_global = int(rem_idx[best_local].item())
-            selected.append(best_global)
-            remaining.remove(best_global)
+            # Update conditional gains for remaining items
+            L_col = L[best, :]
+            if t == 0:
+                e = L_col / chol_rows[0, best]
+            else:
+                prev = chol_rows[:t, :]
+                solve_rhs = L_col - (prev[:, best] @ prev)
+                e = solve_rhs / chol_rows[t, best]
+
+            chol_rows[t, :] = e
+            diag_L -= e * e
 
         return selected
 
     def soft_select(self, embeddings, quality_scores):
+        """Differentiable relaxation: marginal inclusion probabilities via K = L(L+I)^{-1}."""
         n = embeddings.shape[0]
         L = self._build_L_kernel(embeddings, quality_scores)
         eye = torch.eye(n, device=L.device, dtype=L.dtype)
-        K = L @ torch.linalg.inv(L + eye + 1e-6 * eye)
+        # Use solve instead of inv for stability: K = L @ (L + I)^{-1}
+        # Equivalent: K = I - (L + I)^{-1}, but solve is more stable
+        LpI = L + eye
+        # Add small regularization to ensure positive-definite
+        LpI = LpI + 1e-4 * eye
+        K = torch.linalg.solve(LpI.T, L.T).T
         marginals = torch.diagonal(K).clamp(0.0, 1.0)
-        return torch.sigmoid((marginals - 0.5) / self.temperature)
+        return marginals

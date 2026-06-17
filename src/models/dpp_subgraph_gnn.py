@@ -74,14 +74,17 @@ class DPPSubgraphGNN(nn.Module):
         quality_scores = self.margin_scorer(subgraph_embeddings, graph_context)
 
         if self.training:
-            soft_weights = self.dpp_selector.soft_select(subgraph_embeddings, quality_scores)
+            marginals = self.dpp_selector.soft_select(subgraph_embeddings, quality_scores)
+            # Normalize so weights sum to 1 (consistent scale with eval)
+            soft_weights = marginals / marginals.sum().clamp(min=1e-8)
             aggregated = self.aggregator(subgraph_embeddings, soft_weights)
             selected_indices = self.dpp_selector(subgraph_embeddings.detach(), quality_scores.detach())
         else:
             selected_indices = self.dpp_selector(subgraph_embeddings, quality_scores)
             sel_idx = torch.tensor(selected_indices, device=subgraph_embeddings.device, dtype=torch.long)
             selected_embeddings = subgraph_embeddings.index_select(0, sel_idx)
-            uniform_weights = torch.ones(len(selected_indices), device=subgraph_embeddings.device)
+            # Normalize: uniform weights that sum to 1
+            uniform_weights = torch.ones(len(selected_indices), device=subgraph_embeddings.device) / len(selected_indices)
             aggregated = self.aggregator(selected_embeddings, uniform_weights)
 
         logits = self.classifier(aggregated)

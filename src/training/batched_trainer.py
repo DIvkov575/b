@@ -49,30 +49,30 @@ class BatchedDPPSubgraphGNN(torch.nn.Module):
         all_info = []
         for i, (start, end) in enumerate(graph_boundaries):
             sub_embs = all_embeddings[start:end]  # (n_i, hidden_dim)
+            qs = torch.zeros(0)
 
             if sub_embs.shape[0] == 0:
-                graph_emb = torch.zeros(all_embeddings.shape[1])
+                graph_emb = torch.zeros(all_embeddings.shape[1], device=all_embeddings.device)
             else:
                 graph_context = sub_embs.mean(dim=0)
-                quality_scores = self.margin_scorer(sub_embs, graph_context)
+                qs = self.margin_scorer(sub_embs, graph_context)
 
                 if self.training:
-                    soft_weights = self.dpp_selector.soft_select(sub_embs, quality_scores)
-                    graph_emb = self.aggregator(sub_embs, soft_weights)
+                    marginals = self.dpp_selector.soft_select(sub_embs, qs)
+                    weights = marginals / marginals.sum().clamp(min=1e-8)
+                    graph_emb = self.aggregator(sub_embs, weights)
                 else:
-                    selected = self.dpp_selector(sub_embs.detach(), quality_scores.detach())
+                    selected = self.dpp_selector(sub_embs.detach(), qs.detach())
                     sel_idx = torch.tensor(selected, dtype=torch.long)
                     sel_embs = sub_embs[sel_idx]
-                    weights = torch.ones(len(selected))
+                    weights = torch.ones(len(selected)) / max(len(selected), 1)
                     graph_emb = self.aggregator(sel_embs, weights)
 
             logits = self.classifier(graph_emb)
             all_logits.append(logits)
 
             if return_margin_info:
-                all_info.append({
-                    "quality_scores": quality_scores if sub_embs.shape[0] > 0 else torch.zeros(0),
-                })
+                all_info.append({"quality_scores": qs})
 
         logits_batch = torch.stack(all_logits)  # (batch, out_dim)
 
