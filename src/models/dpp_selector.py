@@ -56,6 +56,6 @@ class DPPSelector(nn.Module):
         n = embeddings.shape[0]
         L = self._build_L_kernel(embeddings, quality_scores)
         eye = torch.eye(n, device=L.device, dtype=L.dtype)
-        K = L @ torch.linalg.inv(L + eye)
-        marginals = torch.diagonal(K)
+        K = L @ torch.linalg.inv(L + eye + 1e-6 * eye)
+        marginals = torch.diagonal(K).clamp(0.0, 1.0)
         return torch.sigmoid((marginals - 0.5) / self.temperature)

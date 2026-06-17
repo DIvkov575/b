@@ -5,10 +5,11 @@ from src.training.margin_utils import compute_margin
 
 
 class Trainer:
-    def __init__(self, model, lr=1e-3, margin_weight=0.1, warmup_epochs=10):
+    def __init__(self, model, lr=1e-3, margin_weight=0.1, warmup_epochs=10, task="classification"):
         self.model = model
         self.margin_weight = margin_weight
         self.warmup_epochs = warmup_epochs
+        self.task = task
         self.epoch = 0
         self.optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
@@ -25,14 +26,15 @@ class Trainer:
             if label.dim() == 0:
                 label = label.unsqueeze(0)
 
-            cls_loss = classification_loss(logits, label)
+            logits_2d = logits.unsqueeze(0) if logits.dim() == 1 else logits
+            cls_loss = classification_loss(logits_2d, label, task=self.task)
             loss = cls_loss
 
             margin_value = 0.0
-            if self.epoch >= self.warmup_epochs:
-                actual_margin = compute_margin(logits.detach(), label)
+            if self.epoch >= self.warmup_epochs and info["quality_scores"].numel() > 0:
+                actual_margin = compute_margin(logits_2d.detach(), label)
                 quality_scores = info["quality_scores"]
-                margin_broadcast = actual_margin.expand_as(quality_scores)
+                margin_broadcast = actual_margin.expand(quality_scores.shape[0])
                 m_loss = dpp_margin_loss(quality_scores, margin_broadcast)
                 loss = loss + self.margin_weight * m_loss
                 margin_value = m_loss.item()
@@ -52,6 +54,7 @@ class Trainer:
         self.model.eval()
         correct = 0
         total = 0
+        total_mae = 0.0
         margin_sum = 0.0
         margin_count = 0
 
@@ -64,14 +67,22 @@ class Trainer:
                 if label.dim() == 0:
                     label = label.unsqueeze(0)
 
-                preds = logits.argmax(dim=-1)
-                correct += (preds == label).sum().item()
+                logits_2d = logits.unsqueeze(0) if logits.dim() == 1 else logits
+
+                if self.task == "regression":
+                    total_mae += torch.abs(logits_2d.view(-1) - label.view(-1).float()).sum().item()
+                else:
+                    preds = logits_2d.argmax(dim=-1)
+                    correct += (preds == label).sum().item()
                 total += label.numel()
 
-                margin = compute_margin(logits, label)
+                margin = compute_margin(logits_2d, label)
                 margin_sum += margin.sum().item()
                 margin_count += margin.numel()
 
-        accuracy = correct / total if total > 0 else 0.0
-        avg_margin = margin_sum / margin_count if margin_count > 0 else 0.0
-        return {"accuracy": accuracy, "avg_margin": avg_margin}
+        metrics = {"avg_margin": margin_sum / max(margin_count, 1)}
+        if self.task == "regression":
+            metrics["mae"] = total_mae / max(total, 1)
+        else:
+            metrics["accuracy"] = correct / max(total, 1)
+        return metrics

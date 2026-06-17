@@ -72,7 +72,7 @@ class DPPSubgraphGNN(nn.Module):
         if self.training:
             soft_weights = self.dpp_selector.soft_select(subgraph_embeddings, quality_scores)
             aggregated = self.aggregator(subgraph_embeddings, soft_weights)
-            selected_indices = self.dpp_selector(subgraph_embeddings, quality_scores)
+            selected_indices = self.dpp_selector(subgraph_embeddings.detach(), quality_scores.detach())
         else:
             selected_indices = self.dpp_selector(subgraph_embeddings, quality_scores)
             sel_idx = torch.tensor(selected_indices, device=subgraph_embeddings.device, dtype=torch.long)

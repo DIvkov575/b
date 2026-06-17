@@ -62,7 +62,7 @@ def run_experiment(model_type: str, config_path: str, epochs_override: int = Non
     out_dim = 1
 
     model = build_model(model_type, config, in_dim=in_dim, out_dim=out_dim)
-    trainer = Trainer(model, lr=lr, warmup_epochs=margin_warmup)
+    trainer = Trainer(model, lr=lr, warmup_epochs=margin_warmup, task="regression")
 
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(exist_ok=True)
