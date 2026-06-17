@@ -46,6 +46,42 @@ Subgraph GNNs (ESAN, GNN-AK) increase expressivity by running a base GNN on a ba
 - ESAN/HyMN are label-blind; Spinelli optimizes a different objective
 - The novel piece is the selection criterion: connecting margin theory → instance-level differentiable subgraph scoring
 
+### Critical Competitor: Policy-Learn (ICLR 2024, arXiv:2310.20082)
+
+Bevilacqua et al. already do learned subgraph selection with provable separation guarantees. "Learned subgraph selection" as a concept is NOT novel. Any solution must clearly differentiate from Policy-Learn.
+
+**Policy-Learn's limitation:** Selects for expressivity (distinguishing power). Does NOT consider margin, generalization, or diversity of selected subgraphs. This is our opening.
+
+### Proposed Solutions (post-novelty audit)
+
+**Primary: Diversified Subgraph Selection via DPP (Solution D)**
+
+Analogy: Markowitz portfolio theory. Each subgraph is an "asset" with margin-contribution as "return" and covariance with other subgraphs as "risk." Select a diversified portfolio of k subgraphs that maximizes expected margin while minimizing redundancy.
+
+Mechanism:
+- Compute per-subgraph margin contribution vectors across a batch
+- Build a DPP kernel: quality term = margin contribution, similarity term = embedding correlation
+- Sample/optimize from the DPP to select k diverse, high-margin subgraphs
+- Differentiable relaxation for end-to-end training
+
+Why novel vs Policy-Learn: Policy-Learn picks the most *expressive* subgraphs. We pick the most *diversely informative* ones for generalization. Two subgraphs that both help on easy examples are redundant — DPP avoids this.
+
+Prior art check: No DPP for subgraph-bag selection exists. DPPs in GNNs exist only for negative sampling (Duan TMLR'24) and counterfactual explanations (DCE-RD). None for ESAN-family input selection.
+
+**Secondary: Influence-Function Subgraph Attribution (Solution A)**
+
+Mechanism: Derive influence functions through ESAN's subgraph-equivariant aggregation to attribute margin change to individual bag elements. Select subgraphs with highest positive margin influence.
+
+Why novel vs Policy-Learn: Fundamentally different mechanism (IF vs RL/Gumbel). Provides per-instance attribution (which specific subgraph helped THIS example), not just a global policy. Connects to data attribution literature.
+
+Prior art check: IFs in GNNs exist for unlearning (GIF), edge-editing, label denoising — none for bag selection.
+
+**Backup: Architecture Curriculum (Solution C)**
+
+Grow subgraph bag progressively during training: start at k=1, add subgraphs only if margin is preserved. Connects curriculum learning (data axis) to architecture complexity (model axis).
+
+Prior art check: Only one partial precedent (SAT-GNNs, depth growth). No graph paper does curriculum over WL hierarchy or subgraph budget.
+
 ### Key Empirical Claims Needed
 
 1. Cases where high-centrality subgraphs (HyMN's choice) hurt margin — our method avoids them
@@ -76,10 +112,14 @@ Laptop-scale. Standard benchmarks: ZINC (~12K graphs), OGB-molhiv (~41K), TU dat
 - Franks, Morris, Velingker, Geerts. "WL at the margin: When more expressivity matters." ICML 2024. arXiv:2402.07568
 - Li, Geerts, Kim, Wang. "Towards Bridging Generalization and Expressivity of GNNs." arXiv:2410.10051
 - Bevilacqua et al. "Equivariant Subgraph Aggregation Networks." ICLR 2022. arXiv:2110.02910
+- Bevilacqua et al. "Policy-Learn." ICLR 2024. arXiv:2310.20082 ← CRITICAL COMPETITOR
 - Zhao et al. "Stars, Subgraphs, and Paths..." (GNN-AK). NeurIPS 2022. arXiv:2110.03753
 - Southern, Frasca et al. "HyMN." ICML 2025. arXiv:2501.03113
 - Spinelli et al. "Combining Stochastic Explainers and Subgraph NNs." 2023. arXiv:2304.07152
 - Muller, Morris. "Attending to Graph Transformers." ICML 2024. arXiv:2406.03148
+- Qian, Chen, Morris. "OSAN: Ordered Subgraph Attention Networks." NeurIPS 2022. arXiv:2206.11168
+- Bar-Shalom et al. "MAG-GNN." arXiv:2310.19142
+- Duan et al. "DPP for negative sampling in GNNs." TMLR 2024. arXiv:2403.11408
 
 ---
 
