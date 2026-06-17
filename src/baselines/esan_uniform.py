@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch_geometric.data import Batch, Data
 
-from src.data.subgraph_policies import node_deletion_subgraphs
+from src.data.subgraph_policies import node_deletion_subgraphs, strip_subgraph
 from src.models.base_gnn import GINEncoder
 
 
@@ -37,7 +37,7 @@ class ESANUniform(nn.Module):
         sampled = random.sample(subgraphs, k)
 
         device = data.x.device
-        batch = Batch.from_data_list(sampled).to(device)
+        batch = Batch.from_data_list([strip_subgraph(s) for s in sampled]).to(device)
         subgraph_embeddings = self.encoder(batch)
         bag_emb = subgraph_embeddings.mean(dim=0)
         logits = self.classifier(bag_emb)

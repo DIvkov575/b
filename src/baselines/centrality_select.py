@@ -13,7 +13,7 @@ import torch.nn as nn
 from torch_geometric.data import Batch, Data
 from torch_geometric.utils import degree
 
-from src.data.subgraph_policies import node_deletion_subgraphs
+from src.data.subgraph_policies import node_deletion_subgraphs, strip_subgraph
 from src.models.base_gnn import GINEncoder
 
 
@@ -53,7 +53,7 @@ class CentralitySelect(nn.Module):
 
         selected = [subgraphs[i] for i in topk_idx]
         device = data.x.device
-        batch = Batch.from_data_list(selected).to(device)
+        batch = Batch.from_data_list([strip_subgraph(s) for s in selected]).to(device)
         subgraph_embeddings = self.encoder(batch)
 
         aggregated = subgraph_embeddings.mean(dim=0)

@@ -13,6 +13,11 @@ from torch_geometric.data import Data
 from torch_geometric.utils import k_hop_subgraph, subgraph
 
 
+def strip_subgraph(sub: Data) -> Data:
+    """Keep only x, edge_index, num_nodes — avoids device issues with extra attrs."""
+    return Data(x=sub.x, edge_index=sub.edge_index, num_nodes=sub.num_nodes)
+
+
 def _induced_subgraph(data: Data, keep_mask: torch.Tensor) -> Data:
     """Build an induced subgraph over nodes where ``keep_mask`` is True."""
     keep_idx = keep_mask.nonzero(as_tuple=False).view(-1)

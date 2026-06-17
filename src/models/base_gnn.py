@@ -30,7 +30,7 @@ class GINEncoder(nn.Module):
         if single:
             data = Batch.from_data_list([data])
 
-        x, edge_index, batch = data.x, data.edge_index, data.batch
+        x, edge_index, batch = data.x.float(), data.edge_index, data.batch
 
         for conv, bn in zip(self.convs, self.bns):
             x = conv(x, edge_index)

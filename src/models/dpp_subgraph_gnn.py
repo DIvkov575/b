@@ -7,6 +7,7 @@ from src.data.subgraph_policies import (
     edge_deletion_subgraphs,
     ego_subgraphs,
     node_deletion_subgraphs,
+    strip_subgraph,
 )
 from src.models.bag_aggregator import BagAggregator
 from src.models.base_gnn import GINEncoder
@@ -66,7 +67,7 @@ class DPPSubgraphGNN(nn.Module):
             return logits
 
         device = data.x.device
-        batch = Batch.from_data_list(subgraphs).to(device)
+        batch = Batch.from_data_list([strip_subgraph(s) for s in subgraphs]).to(device)
         subgraph_embeddings = self.encoder(batch)
 
         graph_context = subgraph_embeddings.mean(dim=0)

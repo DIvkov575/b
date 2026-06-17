@@ -7,6 +7,7 @@ from src.training.margin_utils import compute_margin
 def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
+    # MPS disabled: PyG 2.6.1 GINConv.propagate() has device mismatch bugs on MPS
     return torch.device("cpu")
 
 
