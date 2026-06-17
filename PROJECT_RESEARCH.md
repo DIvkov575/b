@@ -1,19 +1,85 @@
-# Generative Biomolecule Project Research
+# Project Research
 
 ## Overview
 
-Research conducted June 2026 to identify a novel, compute-feasible generative biomolecule project.
-Constraints: 1 GPU (Apple Silicon M3/M4 Max, no guaranteed A100), publishable at ML venue.
+Research conducted June 2026 to identify a novel, compute-feasible project at a top ML venue.
+Constraints: laptop/single-GPU scale, 2-3 month timeline, genuine method contribution (not thin wrapper).
 
-**Selected Project:** Multi-Target Binder Design — generating a single protein that binds multiple targets simultaneously via RFdiffusion dual-hotspot conditioning (inference-only, no retraining)
+**Selected Project:** Margin-Aware Subgraph Selection for Subgraph GNNs — learn which subgraphs to include based on classification margin, rather than fixed/random/structural policies. Targets LoG 2025 or NeurIPS 2025 workshop, stretch for main conference.
 
 **Previous selections (all superseded after rigorous lit review):**
+- Multi-Target Binder Design (abandoned: thin wrapper around RFdiffusion's existing hotspot conditioning — no new algorithm)
 - Specificity-Aware Design / NOT operator (abandoned: ActivityDiff 2025 does the same thing)
 - Dirichlet FM for Inverse Folding (abandoned: Tang 2025 solved scaling; ADFLIP does inverse folding with flow)
 - Latent Dynamics (abandoned: DynaFold Sep 2025, GLDP, ConfRover all published the same idea)
 - Multi-State Design (abandoned: DynamicMPNN + ADFLIP July 2025)
 - Evolutionary Flow (abandoned: PEINT Feb 2026)
 - Learning from Failures (abandoned: 6+ DPO papers 2025-2026)
+
+---
+
+## Current Direction: Margin-Aware Subgraph Selection
+
+### The Problem
+
+Subgraph GNNs (ESAN, GNN-AK) increase expressivity by running a base GNN on a bag of subgraphs. More subgraphs = more expressive = can distinguish more graphs. But Franks-Morris (ICML 2024) proved that added expressivity can *shrink* the classification margin and hurt generalization. Currently, all subgraph GNNs select subgraphs blindly — no method selects subgraphs to maximize margin.
+
+### Gap Analysis
+
+| Paper | Contribution | What's missing |
+|-------|-------------|----------------|
+| Franks-Morris (ICML 2024, arXiv:2402.07568) | Proves subgraph pattern choice affects margin; introduces 1-WLOAF kernel with provable margin properties | Hand-picks pattern set F; no adaptive/per-instance selection |
+| Li-Geerts (Oct 2024, arXiv:2410.10051) | k-variance margin bound, architecture-agnostic | Pure theory — no algorithm, no subgraph selection criterion |
+| ESAN (ICLR 2022, arXiv:2110.02910) | Bag-of-subgraphs with fixed policies (node-delete, edge-delete, ego-net) | No learned selection; uniform random for budget control |
+| GNN-AK (NeurIPS 2022, arXiv:2110.03753) | Fixed k-ego subgraphs per node | No selection |
+| HyMN (ICML 2025, arXiv:2501.03113) | Walk-based centrality to rank/prune subgraphs | Task-agnostic structural heuristic — ignores labels and margin |
+| Spinelli 2023 (arXiv:2304.07152) | Learned end-to-end subgraph selection | Optimizes interpretability, not margin/generalization |
+| P2GNN 2023 | Affinity-based learned subgraphs | Optimizes exclusion regularization, not margin |
+
+### Our Contribution
+
+**Margin-aware subgraph selection:** Given a compute budget of k subgraphs per graph, score candidates by their contribution to classification margin (differentiable proxy from Franks-Morris/Li-Geerts theory), select top-k per instance during training.
+
+**Why not a thin wrapper:**
+- Franks-Morris proves the tradeoff exists but doesn't operationalize it into selection
+- Li-Geerts gives a bound but never uses it as a criterion
+- ESAN/HyMN are label-blind; Spinelli optimizes a different objective
+- The novel piece is the selection criterion: connecting margin theory → instance-level differentiable subgraph scoring
+
+### Key Empirical Claims Needed
+
+1. Cases where high-centrality subgraphs (HyMN's choice) hurt margin — our method avoids them
+2. Improvement over uniform sampling at same budget k
+3. Largest gain on datasets where expressive subgraph GNNs currently underperform simpler 1-WL GNNs (the Franks-Morris regime)
+
+### Risks
+
+| Risk | Severity | Mitigation |
+|------|----------|------------|
+| Geerts group scoops (they have the theory + obvious next paper) | High | Move fast; they publish theory not methods |
+| HyMN centrality already correlates with margin signal | Medium | Construct examples where centrality hurts; ablate |
+| Empirical gain is too small (<1%) | Medium | Focus on datasets in the "expressivity hurts" regime |
+| Reviewer says "just a regularizer" | Medium | Frame as architecture (selection) not post-hoc regularization |
+
+### Compute Requirements
+
+Laptop-scale. Standard benchmarks: ZINC (~12K graphs), OGB-molhiv (~41K), TU datasets. ESAN training takes minutes-to-hours on single GPU. Margin computation adds overhead but subgraph budget k is small by design.
+
+### Target Venues
+
+- LoG 2025 (Learning on Graphs) — primary
+- NeurIPS 2025 workshop (New Frontiers in Graph Learning)
+- ICML 2026 (stretch)
+
+### Key References
+
+- Franks, Morris, Velingker, Geerts. "WL at the margin: When more expressivity matters." ICML 2024. arXiv:2402.07568
+- Li, Geerts, Kim, Wang. "Towards Bridging Generalization and Expressivity of GNNs." arXiv:2410.10051
+- Bevilacqua et al. "Equivariant Subgraph Aggregation Networks." ICLR 2022. arXiv:2110.02910
+- Zhao et al. "Stars, Subgraphs, and Paths..." (GNN-AK). NeurIPS 2022. arXiv:2110.03753
+- Southern, Frasca et al. "HyMN." ICML 2025. arXiv:2501.03113
+- Spinelli et al. "Combining Stochastic Explainers and Subgraph NNs." 2023. arXiv:2304.07152
+- Muller, Morris. "Attending to Graph Transformers." ICML 2024. arXiv:2406.03148
 
 ---
 
