@@ -1,0 +1,25 @@
+dataset:
+  name: ZINC
+  subset: true
+
+model:
+  hidden_dim: 64
+  num_layers: 4
+  dropout: 0.0
+  pool: sum
+
+selection:
+  policy: node_deletion
+  budget_k: 10
+  dpp_temperature: 1.0
+
+training:
+  epochs: 300
+  lr: 0.001
+  weight_decay: 0.0
+  batch_size: 128
+  margin_warmup_epochs: 10
+
+evaluation:
+  metric: mae
+  seeds: [0, 1, 2, 3, 4]
