@@ -47,7 +47,9 @@ class DPPSubgraphGNN(nn.Module):
         self.classifier = nn.Linear(hidden_dim, out_dim)
 
     def forward(self, data: Data, return_margin_info: bool = False):
-        subgraphs = self.policy_fn(data)
+        # Subgraph generation must happen on CPU (graph manipulation)
+        data_cpu = data.cpu() if data.x.device.type != "cpu" else data
+        subgraphs = self.policy_fn(data_cpu)
 
         if len(subgraphs) == 0:
             graph_emb = self.encoder(data)
@@ -63,7 +65,8 @@ class DPPSubgraphGNN(nn.Module):
                 return logits, info
             return logits
 
-        batch = Batch.from_data_list(subgraphs)
+        device = data.x.device
+        batch = Batch.from_data_list(subgraphs).to(device)
         subgraph_embeddings = self.encoder(batch)
 
         graph_context = subgraph_embeddings.mean(dim=0)

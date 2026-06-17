@@ -35,12 +35,16 @@ class CentralitySelect(nn.Module):
         deg = degree(data.edge_index[0], num_nodes=data.num_nodes)
         return deg.tolist()
 
-    def forward(self, data: Data) -> torch.Tensor:
-        subgraphs = node_deletion_subgraphs(data)
+    def forward(self, data: Data, return_margin_info: bool = False) -> torch.Tensor:
+        data_cpu = data.cpu() if data.x.device.type != "cpu" else data
+        subgraphs = node_deletion_subgraphs(data_cpu)
 
         if len(subgraphs) == 0:
             graph_emb = self.encoder(data)
-            return self.classifier(graph_emb)
+            logits = self.classifier(graph_emb)
+            if return_margin_info:
+                return logits, {"selected_indices": [], "quality_scores": torch.zeros(0)}
+            return logits
 
         scores = self._centrality_scores(data)
         scores_tensor = torch.tensor(scores, dtype=torch.float)
@@ -48,8 +52,12 @@ class CentralitySelect(nn.Module):
         topk_idx = torch.topk(scores_tensor, k=k).indices.tolist()
 
         selected = [subgraphs[i] for i in topk_idx]
-        batch = Batch.from_data_list(selected)
+        device = data.x.device
+        batch = Batch.from_data_list(selected).to(device)
         subgraph_embeddings = self.encoder(batch)
 
         aggregated = subgraph_embeddings.mean(dim=0)
-        return self.classifier(aggregated)
+        logits = self.classifier(aggregated)
+        if return_margin_info:
+            return logits, {"selected_indices": topk_idx, "quality_scores": scores_tensor}
+        return logits

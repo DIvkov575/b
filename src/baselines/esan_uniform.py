@@ -22,17 +22,25 @@ class ESANUniform(nn.Module):
         self.encoder = GINEncoder(in_dim, hidden_dim, hidden_dim, num_layers=num_layers)
         self.classifier = nn.Linear(hidden_dim, out_dim)
 
-    def forward(self, data: Data) -> torch.Tensor:
-        subgraphs = node_deletion_subgraphs(data)
+    def forward(self, data: Data, return_margin_info: bool = False) -> torch.Tensor:
+        data_cpu = data.cpu() if data.x.device.type != "cpu" else data
+        subgraphs = node_deletion_subgraphs(data_cpu)
 
         if len(subgraphs) == 0:
             graph_emb = self.encoder(data)
-            return self.classifier(graph_emb)
+            logits = self.classifier(graph_emb)
+            if return_margin_info:
+                return logits, {"selected_indices": [], "quality_scores": torch.zeros(0)}
+            return logits
 
         k = min(self.budget_k, len(subgraphs))
         sampled = random.sample(subgraphs, k)
 
-        batch = Batch.from_data_list(sampled)
+        device = data.x.device
+        batch = Batch.from_data_list(sampled).to(device)
         subgraph_embeddings = self.encoder(batch)
         bag_emb = subgraph_embeddings.mean(dim=0)
-        return self.classifier(bag_emb)
+        logits = self.classifier(bag_emb)
+        if return_margin_info:
+            return logits, {"selected_indices": [], "quality_scores": torch.zeros(0)}
+        return logits

@@ -4,9 +4,16 @@ from src.training.losses import classification_loss, dpp_margin_loss
 from src.training.margin_utils import compute_margin
 
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 class Trainer:
-    def __init__(self, model, lr=1e-3, margin_weight=0.1, warmup_epochs=10, task="classification"):
-        self.model = model
+    def __init__(self, model, lr=1e-3, margin_weight=0.1, warmup_epochs=10, task="classification", device=None):
+        self.device = device or get_device()
+        self.model = model.to(self.device)
         self.margin_weight = margin_weight
         self.warmup_epochs = warmup_epochs
         self.task = task
@@ -20,6 +27,7 @@ class Trainer:
         n = 0
 
         for graph in loader:
+            graph = graph.to(self.device)
             self.optimizer.zero_grad()
             logits, info = self.model(graph, return_margin_info=True)
             label = graph.y if hasattr(graph, "y") else graph["y"]
@@ -60,6 +68,7 @@ class Trainer:
 
         with torch.no_grad():
             for graph in loader:
+                graph = graph.to(self.device)
                 logits = self.model(graph)
                 if isinstance(logits, tuple):
                     logits = logits[0]
