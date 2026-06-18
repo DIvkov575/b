@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/runpy.py", line 197, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/experiments/ablations.py", line 175, in <module>
+    main()
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/experiments/ablations.py", line 169, in main
+    run_single_model(args.model, budget_k=args.budget_k, epochs=args.epochs, seed=args.seed)
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/experiments/ablations.py", line 135, in run_single_model
+    result = _train_one(
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/experiments/ablations.py", line 46, in _train_one
+    train_metrics = trainer.train_epoch(train_loader)
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/training/trainer.py", line 32, in train_epoch
+    graph = graph.to(self.device)
+  File "/Users/divkov/Library/Python/3.9/lib/python/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/Users/divkov/Library/Python/3.9/lib/python/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/models/dpp_subgraph_gnn.py", line 78, in forward
+    aggregated = self.aggregator(subgraph_embeddings, soft_weights)
+  File "/Users/divkov/Library/Python/3.9/lib/python/site-packages/torch/nn/modules/module.py", line 1773, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/Users/divkov/Library/Python/3.9/lib/python/site-packages/torch/nn/modules/module.py", line 1784, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/Users/divkov/workplace/biostat/.claude/worktrees/init-claude-md/src/models/dpp_selector.py", line 45, in forward
+    L_sel_inv = torch.linalg.inv(L_sel)
+torch._C._LinAlgError: linalg.inv: The diagonal element 3 is zero, the inversion could not be completed because the input matrix is singular.

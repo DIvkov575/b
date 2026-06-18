@@ -51,10 +51,52 @@ The hypothesis "margin-aware diverse selection improves generalization for subgr
 - **Wrong supervision:** Per-subgraph attribution (leave-one-out, influence functions) rather than broadcast margin.
 - **Wrong problem:** The budget-constrained regime (k << n) is dominated by "just use all subgraphs" — selection only matters when full-bag is prohibitively expensive (larger graphs).
 
-## What Could Still Be Publishable
+## V2 Experiment: LOO Supervision + Hard Selection Fix
 
-1. **Negative result paper (LoG workshop):** "Does Diversity Help? A Controlled Study of Subgraph Selection Strategies" — show that on ZINC, simple centrality beats learned methods, and more subgraphs always helps. Frame as empirical guidance for practitioners.
+After diagnosing V1's failures, implemented V2 with:
+1. **Hard DPP selection at train AND eval** (eliminates train/eval distribution mismatch)
+2. **Leave-one-out supervision** (per-subgraph signal: how much does removing each subgraph change the prediction)
+3. **Exploration** (20% random swap of one selected subgraph to avoid self-reinforcing collapse)
+4. **LOO loss only on selected subgraphs** (prevents suppressing unselected subgraphs to zero)
 
-2. **Fix the supervision, re-run:** Replace broadcast margin with leave-one-out attribution (remove each subgraph, measure margin change). This gives per-subgraph signal. If that works, it's the original contribution.
+### V2 Results (dev desktop, 100 epochs, 5 seeds)
 
-3. **Find the right dataset:** Need a dataset where the full bag hurts (or at minimum, doesn't help proportionally). Possible candidates: noisy social graphs, heterogeneous graphs, or synthetic graphs designed to exhibit the Franks-Morris condition.
+| Method | MAE (mean ± std) | Time/seed |
+|--------|-----------------|-----------|
+| Centrality | **0.453 ± 0.012** | 523s |
+| Uniform | 0.493 ± 0.009 | 455s |
+| DPP v2 (LOO + exploration) | 0.550 ± 0.022 | 2592s |
+
+### V2 Per-seed
+
+| Seed | DPP v2 | Uniform | Centrality |
+|------|--------|---------|------------|
+| 0 | 0.547 | 0.509 | 0.442 |
+| 1 | 0.533 | 0.489 | 0.449 |
+| 2 | 0.560 | 0.494 | 0.448 |
+| 3 | 0.583 | 0.482 | 0.474 |
+| 4 | 0.528 | 0.489 | 0.461 |
+
+### V2 Conclusion
+
+**The fix did not help.** DPP v2 (0.550) is marginally worse than DPP v1 (0.539). Fixing the supervision signal and train/eval consistency did not change the fundamental result: learned diversity-based selection is anti-correlated with what helps on ZINC.
+
+## Final Conclusions
+
+1. **The Franks-Morris regime does not manifest on ZINC.** On this clean molecular dataset, more expressivity (more subgraphs) monotonically improves performance. There is no "expressivity hurts generalization" effect to exploit.
+
+2. **Diversity is the wrong inductive bias for molecular graphs.** DPP selects structurally diverse subgraphs (peripheral, atypical). Centrality selects structurally central subgraphs (hubs, core). On molecules, centrality is the better heuristic — core atoms carry more chemical information.
+
+3. **Learned selection adds overhead without benefit when the task is clean.** The DPP scorer adds parameters that compete for gradient signal without contributing useful selection on a low-noise dataset.
+
+4. **Budget selection only matters at scale.** At k=5 of 23 on small molecular graphs, "just use all subgraphs" dominates everything. Selection becomes relevant only when the full bag is prohibitively expensive (large graphs with 100+ nodes).
+
+## Project Status: Abandoned
+
+The thesis "margin-aware diverse selection improves generalization for subgraph GNNs" is empirically refuted on the primary benchmark (ZINC-12K). Two complete implementation attempts (V1: broadcast margin, V2: LOO supervision) both produce worse results than a zero-parameter centrality heuristic.
+
+### What remains potentially publishable
+
+- **Phase diagram paper:** Characterize when selection helps vs hurts across datasets (ZINC, TU, OGB-molhiv) × budgets (k=3,5,10,full). No new method needed — just systematic empirical study.
+- **Distillation paper:** Train full-bag teacher, distill into budget-k student. Reframes from "selection for generalization" to "selection for efficiency."
+- **Negative result workshop paper:** Document that centrality dominates learned selection on ZINC, with analysis of why.
