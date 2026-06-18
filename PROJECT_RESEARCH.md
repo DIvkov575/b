@@ -123,6 +123,39 @@ Laptop-scale. Standard benchmarks: ZINC (~12K graphs), OGB-molhiv (~41K), TU dat
 
 ---
 
+---
+
+## Post-DPP Pivot: Verified Open Problems (June 2026 Deep Research)
+
+Deep research (110 agents, 27 sources, 128 claims, 15 verified) identified 5 GPU-tractable open problems:
+
+### Problem 1: Compositional Guidance for Discrete Flow Matching ⭐ SELECTED
+**Gap:** Discrete Guidance Matching (ICLR 2026, arXiv:2509.21912) derives exact posterior sampling for discrete FM — but only single-condition. Compositional guidance (AND/NOT/OR over multiple properties), application to molecules/proteins, and interaction with different geometries (Dirichlet, alpha-Flow) are all unexplored.
+**Key papers:** Discrete Guidance Matching (arXiv:2509.21912), Discrete FM (arXiv:2407.15595), Dirichlet FM (arXiv:2402.05841)
+**Cross-domain:** Composable Diffusion (Liu ECCV 2022) Boolean algebra → port to discrete flows
+**Audience:** Generative models + ML4Science
+**Status:** SELECTED — see detailed design below
+
+### Problem 2: Scaling Simplex Geometry for Large Vocabularies (K=4 → K=20+)
+**Gap:** Dirichlet FM works for K=4 (DNA) but pathological for K=20 (proteins). alpha-Flow (Apr 2025, arXiv:2504.10283) unifies existing approaches but no consensus best geometry for large K. Gap: learned/adaptive alpha-representation selection.
+**Key papers:** Dirichlet FM (arXiv:2402.05841), alpha-Flow (arXiv:2504.10283)
+**Risk:** 3+ groups actively trying. High scoop risk.
+
+### Problem 3: Scheduler Design for Discrete Flow Matching
+**Gap:** Gat et al. showed different probability path schedules materially improve perplexity, but design space largely unexplored. Learned/adaptive schedulers, time-warping, curriculum-based scheduling untouched.
+**Key papers:** Discrete FM (arXiv:2407.15595), alpha-Flow (arXiv:2504.10283)
+**Risk:** Medium novelty — might be seen as incremental.
+
+### Problem 4: Efficient Equivariant Layers (Gaunt TP + VSTP Unification)
+**Gap:** Gaunt TP (O(L^6)→O(L^3), arXiv:2401.10216) and VSTP (9× via integrals, arXiv:2603.08630) are complementary. Nobody has unified into a single layer or extended to attention for high-L equivariant transformers.
+**Risk:** Heavy math (spherical harmonics, representation theory). Systems contribution.
+
+### Problem 5: Active Learning for Foundation Atomistic Models
+**Gap:** MACE-MP-0 (arXiv:2401.00096) gives broad qualitative but not quantitative accuracy. No principled method for identifying failure modes and efficiently closing gaps.
+**Risk:** Requires DFT compute. More applied science than ML method.
+
+---
+
 ## Table of Contents
 
 1. [Landscape Survey](#1-landscape-survey)

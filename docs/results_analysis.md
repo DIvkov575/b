@@ -95,8 +95,10 @@ After diagnosing V1's failures, implemented V2 with:
 
 The thesis "margin-aware diverse selection improves generalization for subgraph GNNs" is empirically refuted on the primary benchmark (ZINC-12K). Two complete implementation attempts (V1: broadcast margin, V2: LOO supervision) both produce worse results than a zero-parameter centrality heuristic.
 
-### What remains potentially publishable
+### Evaluated pivots (all thin)
 
-- **Phase diagram paper:** Characterize when selection helps vs hurts across datasets (ZINC, TU, OGB-molhiv) × budgets (k=3,5,10,full). No new method needed — just systematic empirical study.
-- **Distillation paper:** Train full-bag teacher, distill into budget-k student. Reframes from "selection for generalization" to "selection for efficiency."
-- **Negative result workshop paper:** Document that centrality dominates learned selection on ZINC, with analysis of why.
+- **Scaling laws / distillation paper:** "Bag size beats learned selection" framing. Evaluated via 5-agent council (theorist, contrarian, expansionist, executor, outsider). Verdict: the audience is ~30-50 ESAN/subgraph-GNN researchers. Practical impact near-zero (ZINC graphs have 23 nodes; nobody is compute-bottlenecked). "More compute = better" is not a surprising finding. The test-time-compute framing is a stretch. Abandoned.
+- **Phase diagram paper:** Characterize when selection helps vs hurts across datasets × budgets. Pure empirical study, no method contribution. Niche audience.
+- **Negative result workshop paper:** Document that centrality dominates learned selection. Curiosity value only.
+
+**Conclusion:** The subgraph GNN selection subfield is too niche to continue in. Pivoting to a different Graph ML problem entirely.
