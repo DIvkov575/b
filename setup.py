@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="dpp-subgraph-select",
+    name="composable-discrete-flows",
     version="0.1.0",
     packages=find_packages(),
-    python_requires=">=3.7",
+    python_requires=">=3.10",
 )
