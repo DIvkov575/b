@@ -32,9 +32,7 @@ def train_classifier(
             batch_seqs = seqs[idx]
             batch_labels = labels[idx]
             t = torch.rand(len(idx), device=device)
-            x_t = torch.stack([
-                noise_sequence(batch_seqs[j], t[j].item(), K) for j in range(len(idx))
-            ])
+            x_t = noise_sequence(batch_seqs, t, K)
             logits = model(x_t, t).squeeze(-1)
             loss = F.binary_cross_entropy_with_logits(logits, batch_labels)
             optimizer.zero_grad()

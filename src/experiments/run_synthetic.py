@@ -17,7 +17,7 @@ def generate_unconditional(
 
     model.eval()
     for step in range(num_steps):
-        t_val = 1.0 - step * dt
+        t_val = 1.0 - (step + 1) * dt
         t = torch.full((n,), t_val, device=device)
         if mode == "ctmc":
             rates = compute_rate_from_denoiser(model, x_t, t, K)
@@ -41,7 +41,7 @@ def generate_guided_single(
     model.eval()
     classifier.eval()
     for step in range(num_steps):
-        t_val = 1.0 - step * dt
+        t_val = 1.0 - (step + 1) * dt
         t = torch.full((n,), t_val, device=device)
         if mode == "ctmc":
             rates = compute_rate_from_denoiser(model, x_t, t, K)
@@ -68,7 +68,7 @@ def generate_composed_and(
     for clf in classifiers:
         clf.eval()
     for step in range(num_steps):
-        t_val = 1.0 - step * dt
+        t_val = 1.0 - (step + 1) * dt
         t = torch.full((n,), t_val, device=device)
         if mode == "ctmc":
             rates = compute_rate_from_denoiser(model, x_t, t, K)
@@ -95,7 +95,7 @@ def generate_composed_not(
     clf_keep.eval()
     clf_avoid.eval()
     for step in range(num_steps):
-        t_val = 1.0 - step * dt
+        t_val = 1.0 - (step + 1) * dt
         t = torch.full((n,), t_val, device=device)
         if mode == "ctmc":
             rates = compute_rate_from_denoiser(model, x_t, t, K)

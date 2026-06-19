@@ -11,14 +11,20 @@ def uniform_rate_matrix(K: int) -> torch.Tensor:
     return R
 
 
-def noise_sequence(x0: torch.Tensor, t: float, K: int) -> torch.Tensor:
-    """Noise a clean sequence x0 at time t. At t=0: clean. At t=1: uniform noise.
-    Marginal: p(x_t = j | x_0 = i) = (1-alpha_t)*delta(i,j) + alpha_t/K
-    where alpha_t = 1 - exp(-t * K/(K-1))
+def noise_sequence(x0: torch.Tensor, t, K: int) -> torch.Tensor:
+    """Noise clean sequences x0 at time t. Supports batched operation.
+    t can be a float (applied to all) or a (B,) tensor (per-sample time).
+    x0: (B, L) or (L,). Returns same shape as x0.
     """
-    if t == 0.0:
-        return x0.clone()
-    alpha_t = 1.0 - torch.exp(torch.tensor(-t * K / (K - 1)))
+    if not isinstance(t, torch.Tensor):
+        t = torch.tensor([t], dtype=torch.float, device=x0.device)
+    t = t.to(x0.device)
+    if t.dim() == 0:
+        t = t.unsqueeze(0)
+    # alpha_t: probability of replacing each token with uniform noise
+    alpha_t = 1.0 - torch.exp(-t * K / (K - 1))  # (B,) or (1,)
+    if x0.dim() == 2:
+        alpha_t = alpha_t.unsqueeze(-1)  # (B, 1) for broadcasting over L
     mask = torch.rand_like(x0.float()) < alpha_t
     noise = torch.randint(0, K, x0.shape, device=x0.device)
     return torch.where(mask, noise, x0)

@@ -25,7 +25,7 @@ def train_ctmc_flow(config: dict, device: str = "cpu") -> CTMCDenoiser:
             seqs = seqs.to(device)
             B = seqs.shape[0]
             t = torch.rand(B, device=device)
-            x_t = torch.stack([noise_sequence(seqs[i], t[i].item(), K) for i in range(B)])
+            x_t = noise_sequence(seqs, t, K)
             logits = model(x_t, t)
             loss = F.cross_entropy(logits.reshape(-1, K), seqs.reshape(-1))
             optimizer.zero_grad()
@@ -56,9 +56,7 @@ def train_prob_path_flow(config: dict, device: str = "cpu") -> ProbPathDenoiser:
             seqs = seqs.to(device)
             B = seqs.shape[0]
             t = torch.rand(B, device=device)
-            x_t = torch.stack([
-                sample_from_categorical(seqs[i], t[i].item(), K) for i in range(B)
-            ])
+            x_t = sample_from_categorical(seqs, t, K)
             logits = model(x_t, t)
             loss = F.cross_entropy(logits.reshape(-1, K), seqs.reshape(-1))
             optimizer.zero_grad()

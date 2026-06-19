@@ -3,17 +3,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def interpolate_categorical(x0: torch.Tensor, t: float, K: int) -> torch.Tensor:
+def interpolate_categorical(x0: torch.Tensor, t, K: int) -> torch.Tensor:
     """Linear interpolation between one-hot(x0) and uniform on the simplex.
     p_t(k) = (1-t) * one_hot(x0, k) + t * (1/K)
+    t can be float or (B,) tensor. x0: (B, L) or (L,).
     """
     one_hot = F.one_hot(x0, K).float()
     uniform = torch.ones_like(one_hot) / K
-    return (1.0 - t) * one_hot + t * uniform
+    if isinstance(t, torch.Tensor) and t.dim() >= 1:
+        # t: (B,) -> (B, 1, 1) for broadcasting over (B, L, K)
+        t_expanded = t.float().reshape(-1, 1, 1) if x0.dim() == 2 else t.float()
+    else:
+        t_expanded = t
+    return (1.0 - t_expanded) * one_hot + t_expanded * uniform
 
 
-def sample_from_categorical(x0: torch.Tensor, t: float, K: int) -> torch.Tensor:
-    """Sample x_t from the interpolated categorical distribution."""
+def sample_from_categorical(x0: torch.Tensor, t, K: int) -> torch.Tensor:
+    """Sample x_t from the interpolated categorical distribution.
+    t can be float or (B,) tensor. x0: (B, L) or (L,).
+    """
     p_t = interpolate_categorical(x0, t, K)
     flat = p_t.reshape(-1, K)
     samples = torch.multinomial(flat, num_samples=1).squeeze(-1)
