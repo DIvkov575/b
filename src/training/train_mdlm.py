@@ -48,8 +48,12 @@ def train_mdlm(config: dict, schedule_weights: torch.Tensor = None,
             x_t = mask_sequence(batch, t, mask_token=MASK_TOKEN)
 
             logits = model(x_t, t)
-            loss = F.cross_entropy(logits.reshape(-1, model.vocab_size),
-                                   batch.reshape(-1))
+            # Only compute loss on masked positions — unmasked tokens are trivially copied
+            mask = (x_t == MASK_TOKEN)  # (B, L)
+            if mask.any():
+                loss = F.cross_entropy(logits[mask], batch[mask])
+            else:
+                continue
 
             optimizer.zero_grad()
             loss.backward()

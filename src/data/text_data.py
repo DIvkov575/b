@@ -3,7 +3,7 @@ from torch.utils.data import Dataset
 from pathlib import Path
 
 
-VOCAB_SIZE = 27  # a-z + space
+VOCAB_SIZE = 28  # 0=mask, 1-26=a-z, 27=space
 MASK_TOKEN = 0   # reserve 0 for mask; chars are 1-27
 
 
