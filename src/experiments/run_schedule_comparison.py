@@ -8,23 +8,38 @@ from src.data.text_data import Text8Dataset, mask_sequence, MASK_TOKEN
 
 
 @torch.no_grad()
-def evaluate_nll(model, dataset, device="cpu", n_eval=1000):
-    """Evaluate average cross-entropy on validation data across timesteps."""
+def evaluate_nll(model, dataset, device="cpu", n_eval=1000, seed=0):
+    """Evaluate masked-position cross-entropy on validation data.
+
+    Correctness requirements (all three models must be compared identically):
+    - Loss computed ONLY on masked positions (matches training; unmasked tokens
+      are trivially present in the input and measure copying, not denoising).
+    - Identical fixed random masks across all models (seeded generator).
+    - Identical fixed t-distribution (uniform grid over [0.1, 0.9]).
+    """
     model.eval()
     model = model.to(device)
     seqs = dataset.seqs[:n_eval].to(device)
     B, L = seqs.shape
 
+    gen = torch.Generator(device=device).manual_seed(seed)
     total_loss = 0.0
+    total_tokens = 0
     n_t = 10
     for t_val in torch.linspace(0.1, 0.9, n_t):
         t = torch.full((B,), t_val.item(), device=device)
-        x_t = mask_sequence(seqs, t, mask_token=MASK_TOKEN)
+        # Deterministic masking: same mask pattern for every model
+        mask_prob = 1.0 - torch.exp(-t).unsqueeze(-1)  # (B, 1)
+        mask = torch.rand(seqs.shape, generator=gen, device=device) < mask_prob
+        x_t = torch.where(mask, torch.full_like(seqs, MASK_TOKEN), seqs)
         logits = model(x_t, t)
-        loss = F.cross_entropy(logits.reshape(-1, model.vocab_size), seqs.reshape(-1))
-        total_loss += loss.item()
+        if mask.any():
+            # Sum (not mean) so timesteps with more masked tokens weight proportionally
+            loss = F.cross_entropy(logits[mask], seqs[mask], reduction="sum")
+            total_loss += loss.item()
+            total_tokens += mask.sum().item()
 
-    return total_loss / n_t
+    return total_loss / max(total_tokens, 1)
 
 
 def run_comparison(config_path: str = "configs/text8_small.yaml"):
@@ -62,11 +77,15 @@ def run_comparison(config_path: str = "configs/text8_small.yaml"):
     model_optimal = train_mdlm(config, schedule_weights=optimal_weights, device=device)
     print()
 
-    # Evaluate all three
-    print("=== Validation Loss Comparison ===")
-    for name, model in [("Uniform", model_uniform), ("Bell", model_bell), ("Optimal (ours)", model_optimal)]:
-        val_loss = evaluate_nll(model, val_ds, device=device)
-        print(f"  {name:20s}: val_loss = {val_loss:.4f}")
+    # Evaluate all three with identical masks/timesteps/seed (computed once)
+    val_uniform = evaluate_nll(model_uniform, val_ds, device=device, seed=0)
+    val_bell = evaluate_nll(model_bell, val_ds, device=device, seed=0)
+    val_optimal = evaluate_nll(model_optimal, val_ds, device=device, seed=0)
+
+    print("=== Validation Loss Comparison (masked-position CE, fixed masks) ===")
+    print(f"  Uniform             : val_loss = {val_uniform:.4f}")
+    print(f"  Bell                : val_loss = {val_bell:.4f}")
+    print(f"  Optimal (ours)      : val_loss = {val_optimal:.4f}")
 
     # I(t) shape analysis
     print(f"\n=== I(t) Curve Analysis ===")
@@ -76,11 +95,6 @@ def run_comparison(config_path: str = "configs/text8_small.yaml"):
         print(f"  -> I(t) is bell-shaped — explains Hong et al.'s heuristic")
     else:
         print(f"  -> I(t) is NOT bell-shaped — optimal schedule differs from bell")
-
-    # Kill gate
-    val_uniform = evaluate_nll(model_uniform, val_ds, device=device)
-    val_bell = evaluate_nll(model_bell, val_ds, device=device)
-    val_optimal = evaluate_nll(model_optimal, val_ds, device=device)
 
     improvement_vs_uniform = (val_uniform - val_optimal) / val_uniform * 100
     improvement_vs_bell = (val_bell - val_optimal) / val_bell * 100
