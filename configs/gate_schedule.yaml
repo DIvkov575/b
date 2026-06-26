@@ -1,0 +1,22 @@
+data:
+  dataset: text8
+  seq_len: 64
+  max_samples: 20000
+  vocab_size: 28
+
+model:
+  hidden_dim: 128
+  num_layers: 4
+  num_heads: 4
+  dropout: 0.0
+
+training:
+  epochs: 30
+  lr: 0.0005
+  batch_size: 128
+  schedule: uniform
+  warmup_steps: 0
+
+sampling:
+  num_steps: 50
+  num_samples: 256
