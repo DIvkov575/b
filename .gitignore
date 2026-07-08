@@ -6,7 +6,9 @@ __pycache__/
 dist/
 build/
 .env
-/data/
-results/*.log
-checkpoints/
-.venv/
+
+# Local-only archive of superseded experiments + large deploy assets (see .archive/README.md)
+.archive/
+# Deploy assets / secrets — never commit
+deploy/
+*.pem

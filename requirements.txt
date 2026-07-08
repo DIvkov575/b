@@ -1,5 +1,4 @@
-torch>=2.1.0
+biopython>=1.81
 numpy>=1.24
 scipy>=1.10
 pyyaml>=6.0
-pytest>=7.0
