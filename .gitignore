@@ -12,3 +12,17 @@ build/
 # Deploy assets / secrets — never commit
 deploy/
 *.pem
+
+# L37: vendored third-party repo, downloaded checkpoints/data, local venvs (all reproducible
+# via docs/L37_PIPELINE_SPEC.md — not source, don't commit large binaries)
+third_party/mdgen/
+.hf_cache/
+.pilot_data/
+.venv-mdgen/
+.venv-mdgen311/
+
+# L35: same pattern — vendored DiffCSP repo, downloaded checkpoint, local venv (all
+# reproducible via docs/L35_PIPELINE_SPEC.md — not source, don't commit large binaries)
+third_party/diffcsp/
+third_party/diffcsp_checkpoints/
+.venv-diffcsp/
