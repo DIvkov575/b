@@ -187,3 +187,69 @@ def test_preprocess_with_cache_different_num_structures_is_a_cache_miss(tmp_path
 
     assert len(small) == 2
     assert len(large) == 4
+
+
+def test_preprocess_with_cache_sample_seed_draws_from_full_csv_not_just_the_head(tmp_path):
+    # Regression test for the eval pipeline's real bug: without sample_seed,
+    # preprocess_with_cache took df.iloc[:num_structures] -- always the
+    # SAME first rows of the csv, not a representative slice of the full
+    # dataset. A random draw (sample_seed set) must be able to pick rows
+    # beyond the first num_structures of the file.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import pandas as pd
+
+    from src.l35.train_distill import preprocess_with_cache
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    csv_path = os.path.join(repo_root, "third_party", "diffcsp", "data", "mp_20", "test.csv")
+    cache_path = tmp_path / "cache.pt"
+
+    results = preprocess_with_cache(
+        csv_path, num_structures=20, cache_path=str(cache_path), sample_seed=0
+    )
+    assert len(results) == 20
+
+    full_df = pd.read_csv(csv_path)
+    head_ids = set(full_df.iloc[:20]["material_id"])
+    sampled_ids = {r["mp_id"] for r in results}
+    assert sampled_ids != head_ids, "sample_seed must draw from the full csv, not just the head"
+
+
+def test_preprocess_with_cache_sample_seed_is_reproducible(tmp_path):
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+
+    from src.l35.train_distill import preprocess_with_cache
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    csv_path = os.path.join(repo_root, "third_party", "diffcsp", "data", "mp_20", "test.csv")
+
+    first = preprocess_with_cache(
+        csv_path, num_structures=10, cache_path=str(tmp_path / "a.pt"), sample_seed=42
+    )
+    second = preprocess_with_cache(
+        csv_path, num_structures=10, cache_path=str(tmp_path / "b.pt"), sample_seed=42
+    )
+
+    assert [r["mp_id"] for r in first] == [r["mp_id"] for r in second]
+
+
+def test_preprocess_with_cache_sample_seed_is_part_of_the_cache_key(tmp_path):
+    # A cache built under one sample_seed must not be silently reused for a
+    # different sample_seed against the same cache_path (same failure class
+    # already guarded for num_structures above).
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+
+    from src.l35.train_distill import preprocess_with_cache
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    csv_path = os.path.join(repo_root, "third_party", "diffcsp", "data", "mp_20", "test.csv")
+    cache_path = tmp_path / "cache.pt"
+
+    seed_0 = preprocess_with_cache(
+        csv_path, num_structures=10, cache_path=str(cache_path), sample_seed=0
+    )
+    seed_1 = preprocess_with_cache(
+        csv_path, num_structures=10, cache_path=str(cache_path), sample_seed=1
+    )
+
+    assert [r["mp_id"] for r in seed_0] != [r["mp_id"] for r in seed_1]

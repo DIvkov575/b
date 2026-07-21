@@ -71,7 +71,15 @@ def build_batch_from_preprocess_results(results, device="cpu"):
     return batch
 
 
-def load_teacher_and_schedulers(ckpt_path, hparams_path, device):
+def _build_and_load_csp_diffusion(ckpt_path, hparams_path):
+    """Constructs the real, full CSPDiffusion LightningModule (decoder +
+    schedulers + the real sample()/forward() methods) from the mp_csp
+    checkpoint. Shared by load_teacher_and_schedulers (decoder-only callers,
+    the consistency-distillation training/eval path) and
+    load_teacher_module (callers that need the whole module, i.e. anyone
+    calling the REAL DiffCSP sample() as a baseline rather than the
+    dual-track DDIM/PF-ODE reimplementation in sample.py).
+    """
     from diffcsp.pl_modules.diffusion import CSPDiffusion
 
     with open(hparams_path) as f:
@@ -91,6 +99,11 @@ def load_teacher_and_schedulers(ckpt_path, hparams_path, device):
     )
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     model.load_state_dict(ckpt["state_dict"], strict=True)
+    return model
+
+
+def load_teacher_and_schedulers(ckpt_path, hparams_path, device):
+    model = _build_and_load_csp_diffusion(ckpt_path, hparams_path)
 
     teacher_decoder = model.decoder.to(device)
     for p in teacher_decoder.parameters():
@@ -98,6 +111,23 @@ def load_teacher_and_schedulers(ckpt_path, hparams_path, device):
     teacher_decoder.eval()
 
     return teacher_decoder, model.beta_scheduler.to(device), model.sigma_scheduler.to(device)
+
+
+def load_teacher_module(ckpt_path, hparams_path, device):
+    """Like load_teacher_and_schedulers, but returns the full CSPDiffusion
+    module (not just its decoder) so callers can invoke the module's own
+    real sample() -- DiffCSP's published stochastic annealed-Langevin
+    predictor-corrector sampler -- rather than the deterministic DDIM/PF-ODE
+    reimplementation in sample.py. Frozen (no_grad-equivalent via
+    requires_grad_(False) on every parameter), eval mode, same guarantees as
+    load_teacher_and_schedulers's decoder.
+    """
+    model = _build_and_load_csp_diffusion(ckpt_path, hparams_path)
+    model = model.to(device)
+    for p in model.parameters():
+        p.requires_grad_(False)
+    model.eval()
+    return model
 
 
 def process_one(*args, **kwargs):
@@ -110,15 +140,29 @@ def process_one(*args, **kwargs):
     return _process_one(*args, **kwargs)
 
 
-def preprocess_with_cache(data_csv, num_structures, cache_path, num_workers=None):
-    """Preprocess the first num_structures rows of a real MP-20 CSV (real CIF
-    parsing via pymatgen, real graph construction), caching the result to
-    cache_path. Mirrors diffcsp.pl_data.dataset.CrystDataset.preprocess()'s
-    own os.path.exists(save_path) -> torch.load / else preprocess+torch.save
-    convention. The cache is keyed by (data_csv, num_structures) stored
-    alongside the results, so a different num_structures against the same
-    cache_path is correctly treated as a miss rather than silently reusing a
-    cache built for a different slice.
+def preprocess_with_cache(data_csv, num_structures, cache_path, num_workers=None, sample_seed=None):
+    """Preprocess num_structures rows of a real MP-20 CSV (real CIF parsing
+    via pymatgen, real graph construction), caching the result to cache_path.
+    Mirrors diffcsp.pl_data.dataset.CrystDataset.preprocess()'s own
+    os.path.exists(save_path) -> torch.load / else preprocess+torch.save
+    convention. The cache is keyed by (data_csv, num_structures, sample_seed)
+    stored alongside the results, so a different num_structures OR a
+    different sample_seed against the same cache_path is correctly treated
+    as a miss rather than silently reusing a cache built for a different
+    slice.
+
+    sample_seed=None (default) takes the first num_structures rows in file
+    order -- the training pilot's own use (an arbitrary but fixed slice of
+    train.csv is fine for a pilot). sample_seed=<int> instead draws a
+    reproducible random sample of num_structures rows from the FULL csv via
+    numpy's default_rng, sorted back to original row order. This matters for
+    eval sets specifically: an early version of the eval pipeline always
+    took df.iloc[:200] of test.csv as the "held-out 200 structures" --
+    confirmed on the real MP-20 test.csv that this first-200 slice's mean
+    spacegroup number differs measurably from the remaining ~8,846 rows
+    (material_id ordering is not randomized upstream), so a fixed-seed
+    random draw is needed for the eval set to be representative rather than
+    an accidental non-random stratum of the same 200 rows every time.
 
     Uses p_umap for real multi-core parallelism (num_workers=None lets
     p_umap use all available cores), matching diffcsp.common.data_utils.
@@ -130,14 +174,26 @@ def preprocess_with_cache(data_csv, num_structures, cache_path, num_workers=None
     remapped back to the CSV's original row order via material_id, exactly
     matching preprocess()'s own mpid_to_results dict-remap.
     """
+    import numpy as np
     import pandas as pd
 
     if os.path.exists(cache_path):
         cached = torch.load(cache_path, weights_only=False)
-        if cached.get("data_csv") == data_csv and cached.get("num_structures") == num_structures:
+        if (
+            cached.get("data_csv") == data_csv
+            and cached.get("num_structures") == num_structures
+            and cached.get("sample_seed") == sample_seed
+        ):
             return cached["results"]
 
-    df = pd.read_csv(data_csv).iloc[:num_structures]
+    full_df = pd.read_csv(data_csv)
+    if sample_seed is None:
+        df = full_df.iloc[:num_structures]
+    else:
+        rng = np.random.default_rng(sample_seed)
+        chosen_idx = rng.choice(len(full_df), size=num_structures, replace=False)
+        df = full_df.iloc[np.sort(chosen_idx)]
+
     unordered_results = p_umap(
         process_one,
         [df.iloc[idx] for idx in range(len(df))],
@@ -152,7 +208,15 @@ def preprocess_with_cache(data_csv, num_structures, cache_path, num_workers=None
     mpid_to_results = {result["mp_id"]: result for result in unordered_results}
     results = [mpid_to_results[df.iloc[idx]["material_id"]] for idx in range(len(df))]
 
-    torch.save({"data_csv": data_csv, "num_structures": num_structures, "results": results}, cache_path)
+    torch.save(
+        {
+            "data_csv": data_csv,
+            "num_structures": num_structures,
+            "sample_seed": sample_seed,
+            "results": results,
+        },
+        cache_path,
+    )
     return results
 
 

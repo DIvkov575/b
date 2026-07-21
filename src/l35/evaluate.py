@@ -27,7 +27,11 @@ from eval_utils import lattices_to_params_shape  # noqa: E402
 
 import src.l35.smact_validity_none_oxidation_states_shim  # noqa: E402  (must follow eval_utils import, patches its smact_validity)
 from src.l35.sample import few_step_sample  # noqa: E402
-from src.l35.train_distill import load_teacher_and_schedulers, preprocess_with_cache  # noqa: E402
+from src.l35.train_distill import (  # noqa: E402
+    load_teacher_and_schedulers,
+    load_teacher_module,
+    preprocess_with_cache,
+)
 
 
 def split_sample_into_crystal_dicts(frac_coords, lattices, atom_types, num_atoms):
@@ -151,6 +155,70 @@ def run_eval(
     return all_metrics
 
 
+def run_real_sampler_eval(model, results, device, seed=0):
+    """Same three-way-comparison purpose as run_eval, but through DiffCSP's
+    OWN real sample() (diffusion.py's stochastic annealed-Langevin
+    predictor-corrector) instead of this project's homebrew deterministic
+    DDIM/PF-ODE reimplementation (few_step_sample). Only meaningful at the
+    model's native NFE (model.beta_scheduler.timesteps, 1000 for mp_csp) --
+    see load_teacher_module's docstring for why truncating the real
+    sampler's step count is invalid, not just different.
+
+    model must be the full CSPDiffusion module (load_teacher_module), not a
+    bare decoder -- sample() is a method on the module, not the decoder.
+
+    model.sample() takes no generator argument; it draws from torch's
+    global RNG directly (torch.randn_like/torch.rand in diffusion.py). To
+    give every real ground-truth structure the same reproducibility
+    guarantee run_eval's explicit generator gives the homebrew sampler,
+    torch.manual_seed(seed + i) is set immediately before each structure's
+    sample() call.
+
+    Returns the same {"match_rate":..., "rms_dist":..., **validity_rates}
+    shape run_eval's per-config dict does, so results can be reported
+    side by side without special-casing downstream.
+    """
+    from compute_metrics import Crystal, RecEval
+    from torch_geometric.data import Batch, Data
+
+    gt_dicts = []
+    sampled_dicts = []
+
+    for i, result in enumerate(results):
+        gt_dict = ground_truth_crystal_dict(result)
+        gt_dicts.append(gt_dict)
+
+        frac_coords, atom_types, lengths, angles, edge_indices, to_jimages, num_atoms = result[
+            "graph_arrays"
+        ]
+        data = Data(
+            frac_coords=torch.Tensor(frac_coords),
+            atom_types=torch.LongTensor(atom_types),
+            lengths=torch.Tensor(lengths).view(1, -1),
+            angles=torch.Tensor(angles).view(1, -1),
+            num_atoms=num_atoms,
+            num_nodes=num_atoms,
+        )
+        batch = Batch.from_data_list([data]).to(device)
+
+        torch.manual_seed(seed + i)
+        out, _traj = model.sample(batch)
+
+        atom_types_t = torch.LongTensor(gt_dict["atom_types"]).to(device)
+        num_atoms_t = torch.tensor([len(gt_dict["atom_types"])], device=device)
+        sampled_dicts.extend(
+            split_sample_into_crystal_dicts(
+                out["frac_coords"], out["lattices"], atom_types_t, num_atoms_t
+            )
+        )
+
+    gt_crys = [Crystal(d) for d in gt_dicts]
+    crys = [Crystal(d) for d in sampled_dicts]
+    metrics = RecEval(crys, gt_crys).get_metrics()
+    metrics.update(validity_rates(crys))
+    return metrics
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -171,11 +239,25 @@ def main():
     )
     parser.add_argument("--num_eval_structures", type=int, default=100)
     parser.add_argument(
+        "--eval_sample_seed", type=int, default=None,
+        help="if set, draw a reproducible random sample of num_eval_structures rows "
+        "from the FULL data_csv instead of the first num_eval_structures rows in "
+        "file order. Recommended for real held-out eval (see preprocess_with_cache's "
+        "docstring: the first-N slice is not a random or stratified draw).",
+    )
+    parser.add_argument(
         "--student_num_steps", type=str, default="8",
         help="comma-separated NFE values to sweep, e.g. '4,8,16'",
     )
     parser.add_argument("--teacher_num_steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--skip_real_sampler_ceiling", action="store_true",
+        help="skip the real DiffCSP model.sample() teacher@1000 baseline (slow: real "
+        "1000-step stochastic predictor-corrector once per structure). On by default "
+        "since it directly answers whether the homebrew deterministic sampler's own "
+        "teacher@1000 number matches DiffCSP's real, published sampler.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -193,10 +275,15 @@ def main():
     student.load_state_dict(student_ckpt["student_state_dict"])
     student.eval()
 
-    cache_path = os.path.join(
-        os.path.dirname(args.data_csv), f".preprocess_cache_eval_{args.num_eval_structures}.pt"
+    cache_suffix = f"{args.num_eval_structures}" if args.eval_sample_seed is None else (
+        f"{args.num_eval_structures}_seed{args.eval_sample_seed}"
     )
-    results = preprocess_with_cache(args.data_csv, args.num_eval_structures, cache_path)
+    cache_path = os.path.join(
+        os.path.dirname(args.data_csv), f".preprocess_cache_eval_{cache_suffix}.pt"
+    )
+    results = preprocess_with_cache(
+        args.data_csv, args.num_eval_structures, cache_path, sample_seed=args.eval_sample_seed
+    )
 
     # Three-way comparison isolates WHY a low few-step match rate happens:
     # teacher@few_steps vs teacher@many_steps separates "few-step sampling
@@ -216,7 +303,16 @@ def main():
     )
 
     for name, metrics in all_metrics.items():
-        print(f"{name}: {metrics}")
+        print(f"{name} (homebrew DDIM/PF-ODE sampler): {metrics}")
+
+    # teacher@1000 through DiffCSP's OWN real sample() (diffusion.py's
+    # stochastic annealed-Langevin predictor-corrector), not the homebrew
+    # deterministic reimplementation every row above uses. Only valid at the
+    # model's native step count -- see run_real_sampler_eval's docstring.
+    if not args.skip_real_sampler_ceiling and args.teacher_num_steps == beta_scheduler.timesteps:
+        teacher_module = load_teacher_module(args.ckpt_path, args.hparams_path, device)
+        real_sampler_metrics = run_real_sampler_eval(teacher_module, results, device, seed=args.seed)
+        print(f"teacher@{beta_scheduler.timesteps} (real DiffCSP sample()): {real_sampler_metrics}")
 
 
 if __name__ == "__main__":
