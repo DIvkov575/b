@@ -59,7 +59,7 @@ def run_training(variant: str, data_path: str, out_path: str, max_files: int,
                   max_length: int = 512, batch_size: int = 32, epochs: int = 5,
                   mask_prob: float = 0.15, sequences_per_file: int = 5,
                   lr: float = 1e-4, d_model: int = 256, n_layers: int = 6,
-                  n_heads: int = 8, d_ff: int = 1024) -> dict:
+                  n_heads: int = 8, d_ff: int = 1024, seed: int = 0) -> dict:
     device = get_device()
     print(f"[{variant}] device: {device}", flush=True)
 
@@ -76,6 +76,10 @@ def run_training(variant: str, data_path: str, out_path: str, max_files: int,
     else:
         raise ValueError(f"unknown variant: {variant}")
 
+    # Same seed for both variants: both models start from identical initial
+    # weights, so any difference in the final metric is attributable to the
+    # data, not to which variant happened to draw a luckier init.
+    torch.manual_seed(seed)
     model = create_model(
         vocab_size=24, d_model=d_model, n_layers=n_layers, n_heads=n_heads,
         d_ff=d_ff, max_length=max_length, dropout=0.1,
@@ -136,6 +140,8 @@ def main():
     parser.add_argument("--n-layers", type=int, default=6)
     parser.add_argument("--n-heads", type=int, default=8)
     parser.add_argument("--d-ff", type=int, default=1024)
+    parser.add_argument("--seed", type=int, default=0,
+                         help="Use the same value for both variants for a controlled comparison")
     args = parser.parse_args()
 
     out_path = args.out_path or str(OUT_DIR / f"{args.variant}_results.json")
@@ -145,6 +151,7 @@ def main():
         max_files=args.max_files, max_length=args.max_length, batch_size=args.batch_size,
         epochs=args.epochs, sequences_per_file=args.sequences_per_file, lr=args.lr,
         d_model=args.d_model, n_layers=args.n_layers, n_heads=args.n_heads, d_ff=args.d_ff,
+        seed=args.seed,
     )
 
 

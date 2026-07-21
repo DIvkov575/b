@@ -25,6 +25,10 @@ train/val/test split fixed.
   `tests/l40/test_split_pinning.py`).
 - Same architecture (`d_model`, `n_layers`, `n_heads`, `d_ff`), optimizer,
   learning rate, batch size, epoch count, mask probability.
+- Same `torch.manual_seed` before model construction for both variants
+  (`train_pilot.py`'s `--seed`, default 0) — both models start from
+  identical initial weights, so a metric difference is attributable to the
+  data, not to which variant happened to draw a luckier init.
 - Metric: held-out (val) MLM accuracy and loss, final epoch.
 
 ## Pilot scale
