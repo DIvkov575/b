@@ -62,3 +62,93 @@ check, not a scaled/definitive result.
 - RCSB fetch rate-limited client-side (`--sleep-seconds`) to avoid hammering
   their API — fetching baseline data for thousands of structures takes
   real wall-clock time (minutes, not seconds).
+- **Gradient-steps confound (discovered post-run, see Result below):** at
+  `sequences_per_file=5`, the boltz variant trains on 5x more sequences per
+  epoch than the baseline (8200 vs 1640, same 1640 structures). Matching
+  epoch count therefore does not match total gradient steps — the result
+  conflates "MSA homology diversity helps" with "more total training data/
+  steps helps." A cleaner isolation would either cap boltz at
+  `sequences_per_file=1` (pure curation-only comparison, expected near-zero
+  per the original design discussion) or match total training steps between
+  variants directly.
+
+## Result (2026-07-21)
+
+Ran on the full pilot slice: 2344 real Boltz-processed RCSB structures
+(HTTP range-fetched from Boltz's public S3 tar), 2344 matching RCSB baseline
+sequences (fetched live via `fetch_rcsb_structures.py`, 0 failures). Pinned
+split confirmed identical on real data: 1640 train / 351 val / 353 test
+structures for both variants (`tests/l40/test_split_pinning.py`-equivalent
+check re-run directly against the real data before training).
+
+Hyperparameters (identical for both): `d_model=128, n_layers=4, n_heads=4,
+d_ff=512, batch_size=32, lr=1e-4, epochs=3, mask_prob=0.15, seed=0`.
+Boltz variant used `sequences_per_file=5`.
+
+| | boltz (MSA-augmented) | baseline (RCSB, 1 seq/structure) |
+|---|---|---|
+| train sequences/epoch | 8200 | 1640 |
+| final train_loss | 2.7241 | 2.9456 |
+| final val_loss | 2.6933 | 2.8723 |
+| final val_accuracy | 0.1981 | 0.1291 |
+
+**val_accuracy_delta = +0.0690 (boltz higher, ~53% relative), val_loss_delta
+= −0.1790 (boltz lower/better).** Both metrics moved consistently in favor
+of the boltz variant across all 3 epochs, not just the final one — boltz's
+val_accuracy was already ahead by epoch 1 (0.170 vs 0.098) and the gap held.
+
+**Verdict per the pre-registered criteria: "Boltz helps"** — a positive
+val_accuracy delta of this size, consistent across epochs, on a real
+(non-synthetic) 2344-structure slice.
+
+**But this does not yet isolate MSA-augmentation as the cause**, per the
+gradient-steps confound above: boltz also saw 5x more training sequences
+per epoch. This pilot answers "does Boltz's pipeline as typically configured
+(`sequences_per_file=5`) beat the no-augmentation baseline" — yes, clearly —
+but not yet "is that because of homology diversity specifically, or because
+of more training volume." Disambiguation run below.
+
+## Disambiguation run (2026-07-21): curation-only, steps-matched
+
+Reran the boltz variant with `sequences_per_file=1` — same 2344 structures,
+same pinned split, same hyperparameters/seed, but now exactly 1 sequence per
+structure (1640 train sequences/epoch, matching the baseline's step count
+exactly). This isolates Boltz's specific extraction/curation from its
+homology-augmentation effect.
+
+| | boltz (seqs_per_file=1) | baseline (RCSB, 1 seq/structure) |
+|---|---|---|
+| train sequences/epoch | 1640 | 1640 |
+| final train_loss | 2.9414 | 2.9456 |
+| final val_loss | 2.8765 | 2.8723 |
+| final val_accuracy | 0.1249 | 0.1291 |
+
+**val_accuracy_delta = −0.0042, val_loss_delta = +0.0042** — both
+indistinguishable from zero at this pilot's scale (single seed, no variance
+estimate, but the magnitude here is ~16x smaller than the sequences_per_file=5
+delta and has the opposite sign on accuracy).
+
+## Combined conclusion
+
+The full-pipeline advantage found in the first run (val_accuracy +0.0690) is
+attributable almost entirely to **training-volume** (5x more sequences per
+epoch from sampling multiple MSA homologs), not to any intrinsic curation-
+quality difference between Boltz's `.npz` pipeline and a plain RCSB fetch —
+confirming the original design-phase prediction for the "curation-only" cut
+(expected near-zero effect) and refuting a naive read of the first run as
+evidence that Boltz's processing itself is higher-quality data.
+
+**Practical implication:** if PFold's goal is masked-LM pretraining quality,
+the effect being tested here isn't "does Boltz's data pipeline matter" —
+it's "does sampling multiple MSA-homolog sequences per structure act as a
+cheap data-augmentation multiplier," which this pilot answers **yes** (at
+pilot scale, single seed). That's a real and useful finding, but it's a
+different claim than "Boltz processing improves per-structure signal
+quality," which this pilot found **no evidence for**.
+
+**Caveats before treating either finding as final:** single seed per run (no
+variance estimate — a repeat with a different seed could shift these deltas
+non-trivially at this small a pilot scale), 3 epochs only, and the
+5x-augmentation win could plausibly not hold at PFold's full training scale
+(150K structures, 250 epochs) where the baseline would also see much more
+data in absolute terms.

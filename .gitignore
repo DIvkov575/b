@@ -31,3 +31,7 @@ third_party/diffcsp_checkpoints/
 # only on the EC2 host (fetched via tarball, not committed — large binary weights)
 .venv-l38/
 src/l38/vendor/
+
+# L40: downloaded Boltz MSA .npz slice + fetched RCSB baseline sequences (reproducible
+# via docs/L40_PROTOCOL.md — not source, don't commit large binaries)
+data/l40_pilot/
