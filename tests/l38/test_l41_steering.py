@@ -3,10 +3,12 @@ import pytest
 
 from src.l38.l41_steering import (
     cohens_d,
+    fit_zscore_stats,
     gate1_decision,
     rank_features_by_separation,
     sae_decode,
     sae_encode,
+    zscore_normalize,
 )
 
 
@@ -122,3 +124,80 @@ def test_sae_encode_batched_matches_single_shapes():
 
     assert features.shape == (5, codebook_dim)
     assert ((features > 0).sum(axis=-1) <= k).all()
+
+
+def test_fit_zscore_stats_recovers_known_mean_and_std():
+    rng = np.random.RandomState(0)
+    # Large-magnitude, non-unit-variance data, mimicking real ESMC hidden
+    # states (per-dim means observed in the range -40..+450, stds 6.8..96 --
+    # see docs/L41_PROTOCOL.md post-hoc correction).
+    true_mean = np.array([100.0, -20.0, 0.0])
+    true_std = np.array([10.0, 5.0, 50.0])
+    activations = rng.normal(true_mean, true_std, size=(5000, 3))
+
+    fitted_mean, fitted_std = fit_zscore_stats(activations)
+
+    np.testing.assert_allclose(fitted_mean, true_mean, atol=1.0)
+    np.testing.assert_allclose(fitted_std, true_std, atol=1.0)
+
+
+def test_fit_zscore_stats_floors_degenerate_zero_variance_dim():
+    activations = np.array([[5.0, 1.0], [5.0, 2.0], [5.0, 3.0]])  # column 0 is constant
+    mean, std = fit_zscore_stats(activations)
+    assert std[0] == 1.0  # floored, not 0.0 -- avoids divide-by-zero downstream
+    assert mean[0] == 5.0
+
+
+def test_zscore_normalize_produces_zero_mean_unit_std_on_fitted_data():
+    rng = np.random.RandomState(0)
+    activations = rng.normal(loc=[100.0, -20.0], scale=[10.0, 5.0], size=(5000, 2))
+    mean, std = fit_zscore_stats(activations)
+
+    normalized = zscore_normalize(activations, mean, std)
+
+    np.testing.assert_allclose(normalized.mean(axis=0), [0.0, 0.0], atol=0.1)
+    np.testing.assert_allclose(normalized.std(axis=0), [1.0, 1.0], atol=0.1)
+
+
+def test_sae_encode_top_k_selection_is_sensitive_to_input_scale():
+    """Regression test for the exact bug found post-hoc in docs/L41_PROTOCOL.md:
+    sae_encode's pre_act = (x - b_dec) @ W_enc is a linear combination across
+    input dimensions. If one raw input dimension has a much larger natural
+    magnitude than others, it dominates every feature's pre-activation
+    regardless of W_enc's per-dimension weighting -- so which feature wins
+    the top-k selection depends on whether inputs were Z-score normalized
+    first, even when the UNDERLYING informative content is identical.
+
+    This is why the real L41 run picked a different "winning" SAE feature
+    (7196 unnormalized vs. 10004 normalized) for the exact same kinase vs.
+    non-kinase activation data -- verified empirically on ESMC-300M layer 20."""
+    rng = np.random.RandomState(0)
+    d_model, codebook_dim = 4, 8
+
+    # Dimension 0 has a huge natural scale (mimics one real ESMC hidden-state
+    # dimension observed with mean up to +450); dimensions 1-3 are small-scale.
+    # W_enc gives dimension 0 only a tiny weight toward feature 5 (the
+    # "genuinely informative" feature once properly scaled), but dimension 0's
+    # raw magnitude is large enough to swamp that signal anyway.
+    W_enc = rng.normal(0, 0.05, size=(d_model, codebook_dim))
+    W_enc[0, 2] = 5.0  # dimension 0 has an outsized raw weight toward feature 2
+    W_enc[1, 5] = 5.0  # dimension 1 (small natural scale) drives feature 5
+
+    b_dec = np.zeros(d_model)
+
+    raw_activation = np.array([500.0, 2.0, 0.5, -1.0])  # dim 0 dominates raw magnitude
+
+    unnormalized_features = sae_encode(raw_activation, W_enc, b_dec, k=1)
+    winning_feature_unnormalized = int(np.argmax(unnormalized_features))
+
+    background = rng.normal([500.0, 2.0, 0.5, -1.0], [50.0, 1.0, 0.3, 0.5], size=(500, d_model))
+    mean, std = fit_zscore_stats(background)
+    normalized_activation = zscore_normalize(raw_activation, mean, std)
+    normalized_features = sae_encode(normalized_activation, W_enc, b_dec, k=1)
+    winning_feature_normalized = int(np.argmax(normalized_features))
+
+    assert winning_feature_unnormalized != winning_feature_normalized, (
+        "expected normalization to change which feature wins top-1 selection "
+        "(reproducing the real bug) -- if this now passes with equal features, "
+        "the synthetic scale disparity is no longer large enough to trigger it"
+    )

@@ -1,0 +1,57 @@
+{
+  "classifier_held_out_accuracy": 0.975,
+  "conditions": {
+    "unsteered": {
+      "mean_p_kinase": 0.042701657861471176,
+      "std_p_kinase": 0.05442488193511963,
+      "n": 60
+    },
+    "real_direction_alpha_5.0": {
+      "mean_p_kinase": 0.04495207592844963,
+      "std_p_kinase": 0.05891365557909012,
+      "n": 60
+    },
+    "real_direction_alpha_10.0": {
+      "mean_p_kinase": 0.04354337602853775,
+      "std_p_kinase": 0.056155428290367126,
+      "n": 60
+    },
+    "real_direction_alpha_20.0": {
+      "mean_p_kinase": 0.0464557409286499,
+      "std_p_kinase": 0.07176940888166428,
+      "n": 60
+    },
+    "random_control_alpha_5.0": {
+      "mean_p_kinase": 0.03984936699271202,
+      "std_p_kinase": 0.05213340371847153,
+      "n": 60
+    },
+    "random_control_alpha_10.0": {
+      "mean_p_kinase": 0.03990650549530983,
+      "std_p_kinase": 0.052670009434223175,
+      "n": 60
+    },
+    "random_control_alpha_20.0": {
+      "mean_p_kinase": 0.03889842331409454,
+      "std_p_kinase": 0.047718167304992676,
+      "n": 60
+    }
+  },
+  "gate3_verdict_per_alpha": {
+    "5.0": {
+      "real_exceeds_baseline": true,
+      "real_exceeds_random_control": true,
+      "decision": "PASS"
+    },
+    "10.0": {
+      "real_exceeds_baseline": true,
+      "real_exceeds_random_control": true,
+      "decision": "PASS"
+    },
+    "20.0": {
+      "real_exceeds_baseline": true,
+      "real_exceeds_random_control": true,
+      "decision": "PASS"
+    }
+  }
+}

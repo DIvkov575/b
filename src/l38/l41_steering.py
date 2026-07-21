@@ -70,11 +70,39 @@ def gate1_decision(ranked_features: List[Tuple[int, float]], threshold: float = 
     }
 
 
+def fit_zscore_stats(activations: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Fit per-dimension mean/std from a [n, d_model] sample of activations.
+    Per the ESM-C SAE paper's methodology ("Each input to the encoder is
+    Z-score normalized"), this must be applied before sae_encode -- omitting
+    it changes which feature wins a Cohen's-d search (verified empirically:
+    feature 7196 wins unnormalized, feature 10004 wins normalized, on the
+    same kinase/non-kinase data -- see docs/L41_PROTOCOL.md's post-hoc
+    correction section). Returns (mean, std) with std floored at 1e-6 to
+    avoid divide-by-zero on a degenerate constant dimension.
+    """
+    mean = activations.mean(axis=0)
+    std = activations.std(axis=0)
+    std = np.where(std < 1e-6, 1.0, std)
+    return mean, std
+
+
+def zscore_normalize(activation: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    return (activation - mean) / std
+
+
 def sae_encode(activation: np.ndarray, W_enc: np.ndarray, b_dec: np.ndarray, k: int) -> np.ndarray:
     """Standard top-k sparse-autoencoder encode: pre_act = (x - b_dec) @ W_enc,
     keep only the top-k values (ReLU'd), zero elsewhere. activation may be
     [d_model] or [n, d_model]; returns matching leading shape with codebook_dim
-    as the last axis."""
+    as the last axis.
+
+    IMPORTANT: `activation` must already be Z-score normalized (see
+    fit_zscore_stats/zscore_normalize above) before calling this -- the SAE
+    was trained on normalized inputs, and skipping this step silently picks
+    a different, wrong "winning" feature in a Cohen's-d search (see
+    docs/L41_PROTOCOL.md's post-hoc correction section for the empirical
+    before/after).
+    """
     pre_act = (activation - b_dec) @ W_enc
     single = pre_act.ndim == 1
     if single:

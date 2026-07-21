@@ -14,7 +14,7 @@ from safetensors import safe_open
 from esm.models.esmc import ESMC
 from esm.sdk.api import ESMProtein, LogitsConfig
 
-from src.l38.l41_steering import gate1_decision, rank_features_by_separation, sae_encode
+from src.l38.l41_steering import fit_zscore_stats, gate1_decision, rank_features_by_separation, sae_encode, zscore_normalize
 from src.l38.phage_data import clean_sequences, parse_fasta, train_eval_split
 
 DATA_DIR = Path(__file__).resolve().parent / "data_cache"
@@ -93,8 +93,16 @@ def main():
     print(f"embedding negative (non-kinase) sequences at layer {LAYER}...", flush=True)
     neg_activations = mean_pooled_layer_activation(model, neg_id, LAYER, device)
 
-    pos_features = sae_encode(pos_activations, W_enc_np, b_dec_np, k=K)
-    neg_features = sae_encode(neg_activations, W_enc_np, b_dec_np, k=K)
+    # SAE encoder inputs must be Z-score normalized per the ESM-C SAE paper's
+    # methodology -- fit stats from the pooled identification-split activations
+    # (see docs/L41_PROTOCOL.md's post-hoc correction: omitting this changed
+    # which feature won the Cohen's-d search in the original run).
+    feature_mean, feature_std = fit_zscore_stats(np.concatenate([pos_activations, neg_activations], axis=0))
+    pos_activations_norm = zscore_normalize(pos_activations, feature_mean, feature_std)
+    neg_activations_norm = zscore_normalize(neg_activations, feature_mean, feature_std)
+
+    pos_features = sae_encode(pos_activations_norm, W_enc_np, b_dec_np, k=K)
+    neg_features = sae_encode(neg_activations_norm, W_enc_np, b_dec_np, k=K)
 
     ranked = rank_features_by_separation(pos_features, neg_features)
     decision = gate1_decision(ranked, threshold=COHENS_D_THRESHOLD)

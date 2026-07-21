@@ -229,6 +229,59 @@ require, e.g., ablation studies or an intermediate readout between the
 feature and the final sequence) — recorded as the honest boundary of what
 was checked, not resolved.
 
+## Post-hoc correction (2026-07-21, prompted by "have you checked everything against the paper?") — a real normalization bug found and fixed
+
+Reading the paper's actual methods section directly (not a research-agent
+summary) surfaced a load-bearing gap: "Each input to the encoder is
+Z-score normalized" — a step **entirely missing** from `l41_run_gate1.py`.
+Checked the raw ESMC-300M layer-20 hidden states directly: per-dimension
+means range from **-40 to +450**, per-dimension stds range from **6.8 to
+96** — nowhere near zero-mean/unit-variance. Feeding these raw into the SAE
+encoder (which was trained expecting normalized inputs) means the original
+Gate 1 search was systematically biased toward whichever raw dimensions
+happen to have large natural magnitude, not necessarily the dimensions that
+actually encode "kinase."
+
+No code (the official PyPI `esm` package, nor the `Biohub/esm` GitHub repo's
+tree) exposes the exact published normalization statistics — the real SAE
+forward pass, including this step, only runs server-side via the hosted
+Forge API, invisible to local inspection. Refit Z-score stats from a
+200-sequence background sample (the closest available approximation to the
+paper's actual method) and reran the identical Cohen's-d feature search.
+
+**Result: the winning feature changes.** Feature **7196** (used throughout
+the original Gate 1-3 run above) only wins under the *unnormalized* (buggy)
+encoding. Under proper normalization, the winning feature is **10004**
+(Cohen's d=1.43, still comfortably above the 1.0 threshold — kinase activity
+is robustly encoded either way, just by a different specific feature index
+than originally identified).
+
+**Rerunning Gate 2 + Gate 3 with feature 10004's decoder direction instead:**
+
+| alpha | mean P(kinase) real-direction | vs. baseline | vs. random control |
+|---|---|---|---|
+| baseline | 0.0427 | — | — |
+| 5 | 0.0450 | +0.32 SE | +0.73 SE |
+| 10 | 0.0435 | +0.12 SE | +0.52 SE |
+| 20 | 0.0465 | +0.53 SE | +1.08 SE |
+
+Unlike the original (buggy-feature) run, this is **directionally consistent
+across all three alphas** — real-direction steering beats both the unsteered
+baseline and the random-direction control every time, not just at one
+alpha with no dose-response. But the effect sizes remain small (0.12–1.08
+SE), well short of a level anyone would call statistically confirmed with a
+single 60-sequence run and no multiple-comparison correction. Full numbers:
+`src/l38/l41_gate3_v2norm_results.json`.
+
+**Revised, calibrated verdict: weak, suggestive positive signal — not a
+confirmed causal effect, but no longer a clean null either.** The corrected
+run is more consistent with "there might be a real, small causal effect
+that this experiment is underpowered to nail down" than with "steering does
+nothing" (the original, bugged conclusion) or "steering clearly works"
+(overclaiming what 1.08 SE at n=60 supports). Confidence in the *direction*
+of the finding is higher than confidence in its *magnitude* or statistical
+robustness.
+
 ## Honest interpretation
 
 The specific, narrow claim under test — *adding this one SAE decoder
