@@ -139,7 +139,15 @@ class MSAModule(nn.Module):
             MSALayer(msa_s=msa_s, token_z=token_z, c_h=c_h, num_heads=num_heads)
             for _ in range(msa_blocks)
         ])
-        self.z_init = nn.Parameter(torch.zeros(1, 1, 1, token_z))
+        # Real Boltz's z arrives pre-populated from an upstream Pairformer
+        # trunk (excluded here -- nothing downstream needs it). Without that,
+        # z starts at zero and PairWeightedAveraging's attention weights (b =
+        # proj_z(z)) carry no cross-homolog signal until OuterProductMean
+        # updates z at the END of a block -- one block too late for that
+        # signal to reach the query. This initial pass seeds z from the raw
+        # MSA embedding before the first block runs, so even msa_blocks=1
+        # lets homolog information reach the query representation.
+        self.z_seed = OuterProductMean(c_in=msa_s, c_hidden=32, c_out=token_z)
 
     def forward(self, msa_onehot: torch.Tensor, has_deletion: torch.Tensor,
                 deletion_value: torch.Tensor, msa_mask: torch.Tensor,
@@ -149,8 +157,7 @@ class MSAModule(nn.Module):
         m = self.msa_proj(m)
         m = m + self.s_proj(single_emb).unsqueeze(1)
 
-        B, _, N, _ = m.shape
-        z = self.z_init.expand(B, N, N, -1).contiguous()
+        z = self.z_seed(m, msa_mask)
 
         for layer in self.layers:
             m, z = layer(m, z, msa_mask, token_pair_mask)
