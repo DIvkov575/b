@@ -1,0 +1,21 @@
+{
+  "arm": "delFalse_profFalse_msaFalse",
+  "max_files": 500,
+  "use_deletion_features": false,
+  "use_profile": false,
+  "use_msa_module": false,
+  "epochs": [
+    {
+      "epoch": 1,
+      "train_loss": 3.1263507171110674,
+      "val_loss": 2.9213059902191163,
+      "val_accuracy": 0.08401084010840108
+    },
+    {
+      "epoch": 2,
+      "train_loss": 2.992635656486858,
+      "val_loss": 2.9097847938537598,
+      "val_accuracy": 0.07497741644083107
+    }
+  ]
+}

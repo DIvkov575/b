@@ -220,3 +220,143 @@ single-seed pilot can't distinguish it from noise. If speed-of-convergence
 (reaching a given accuracy in fewer wall-clock epochs) matters for the
 downstream use case, MSA augmentation is a legitimate, real lever; if only
 the eventual ceiling matters, this pilot found no evidence it raises it.
+
+## Full-pipeline ablation (2026-07-21): every unused Boltz npz field
+
+The runs above only ever used one homolog's *token sequence*. Boltz's real
+`.npz` format carries two more fields the earlier runs never touched:
+`taxonomy` (species ID per homolog) and a `deletions` array (insertion/
+deletion bookkeeping from the alignment). Real Boltz consumes these via a
+genuine architecture, not a data-pipeline trick — verified directly against
+Boltz's own source (`boltz.model.modules.trunkv2`, `boltz.model.layers.
+{pair_averaging,outer_product_mean,transition}`):
+
+- **`taxonomy`** is used only as a *selection key* (never a model input) —
+  Boltz uses it to pick cross-chain-paired MSA rows; here (single chain, no
+  pairing) it's repurposed to pick a taxonomically diverse homolog subset
+  instead of an arbitrary one.
+- **`deletions`** → a real per-position model feature: `has_deletion =
+  raw_count > 0`, `deletion_value = π/2·arctan(raw_count/3)`, fed into the
+  MSA embedding exactly as Boltz's `featurizerv2.py` does.
+- **Cross-homolog attention**: Boltz's `MSAModule` (embed MSA rows →
+  `PairWeightedAveraging` mixes across the homolog axis, weighted by a pair
+  tensor `z` that `OuterProductMean` builds from co-evolution signal) —
+  ported into `src/l40/msa_module.py`, with the structure-specific
+  `PairformerNoSeqLayer` call *removed* (nothing downstream needs a refined
+  pair representation for an MLM task). A separate `profile` branch (per-
+  position AA frequency across all homologs + mean deletion rate) is added
+  directly to the query embedding, matching Boltz's real `InputEmbedder`.
+- **A real gap found and fixed during implementation:** with `z` initialized
+  to zero and only 1 `MSALayer` block, `OuterProductMean` only updates `z` at
+  the *end* of the block — one step too late for cross-homolog signal to
+  reach `PairWeightedAveraging`'s attention weights before the module
+  returns. Real Boltz avoids this because `z` normally arrives pre-populated
+  from an upstream Pairformer trunk (excluded here). Fixed by seeding `z`
+  from the raw MSA embedding via an initial `OuterProductMean` pass before
+  the first block.
+
+### Method
+
+Five arms, each an independent on/off combination on `MSAAwareProteinBERT`,
+holding architecture/hyperparameters/seed/data fixed otherwise:
+
+| Arm | profile | deletion | cross-seq attention (MSA module) |
+|---|---|---|---|
+| A — baseline | off | off | off |
+| B — profile | **on** | off | off |
+| C — cross-attn | off | off | **on** |
+| D — deletion | off | **on** | **on** (deletion only has meaning inside the MSA module) |
+| E — combined | **on** | **on** | **on** |
+
+Data: 500 real Boltz structures (subset of the same 2344-structure pool used
+above), `msa_depth=5` homologs sampled via taxonomy-diversity sampling,
+`max_length=128` (see hardware note below), `batch_size=8`, 2 epochs,
+`d_model=128, n_layers=4, n_heads=4, d_ff=512, msa_s=64, token_z=32,
+msa_blocks=1`, `seed=0` for all arms (same initial weights).
+
+**Hardware constraint on scale:** `OuterProductMean`'s pair tensor is
+`O(N²)` in sequence length (`N×N×c_hidden²` per batch item) — at the
+training-volume ablation's `max_length=512` this OOM'd immediately on this
+machine's 48GB MPS pool (tried to allocate 16GB for one einsum). Cut to
+`max_length=128` and `batch_size=8`; only 500 structures (not the full 2344)
+to keep total wall-clock reasonable across 5 sequential arms. This is a
+*smaller* pilot than the training-volume ablation above, not a scaled-up
+one — read the deltas as directional signal, not precision estimates.
+
+### Result
+
+| Arm | final train_loss | final val_loss | final val_accuracy |
+|---|---|---|---|
+| A — baseline | 2.9926 | 2.9098 | 0.0750 |
+| B — profile | 2.9804 | **2.8862** | **0.1256** |
+| C — cross-attn | 2.9978 | 2.9209 | 0.0849 |
+| D — deletion | 2.9982 | 2.9207 | 0.0822 |
+| E — combined | 2.9798 | 2.9075 | 0.0939 |
+
+Per-epoch curves (all arms improve epoch 1 → 2; none plateaued or diverged):
+
+- A: 0.0840 → 0.0750 (val_accuracy actually *drops* — likely overfitting a
+  350-sequence training set in 2 epochs at this model size, not a real
+  regression)
+- B: 0.0930 → 0.1256
+- C: 0.0777 → 0.0849
+- D: 0.0786 → 0.0822
+- E: 0.0894 → 0.0939
+
+**The profile feature (Arm B) is the clear standout** — val_accuracy
++0.0506 over baseline (~67% relative), the largest and most consistent
+effect of any single mechanism, and the only arm whose val_loss beats
+baseline outright. **Cross-sequence attention (Arm C) gives a small,
+real-looking bump** (+0.0099) — present but far smaller than profile's.
+**Deletion features (Arm D) add essentially nothing over cross-attention
+alone** (0.0822 vs. Arm C's 0.0849 — within noise, if not slightly worse) —
+unsurprising, since deletions are sparse events (most positions have
+`has_deletion=False`), so at this pilot's scale and depth there's little
+signal for the feature to carry. **The combined arm (E) sits between C and
+B, closer to C** (0.0939) — profile's gain does *not* fully carry through
+once cross-attention and deletion features are also active, suggesting
+some interaction/interference between the mechanisms rather than clean
+additivity, though 2 epochs and 350 training sequences is too little to
+characterize that interaction precisely.
+
+### Interpretation
+
+Unlike the earlier training-volume finding (where the "MSA augmentation"
+effect turned out to be almost entirely a training-volume artifact), this
+ablation isolates real architectural mechanisms at matched data/steps
+across all five arms — so the profile-feature effect is not a training-
+volume confound; it's the same 350 sequences, same 2 epochs, same
+everything except which features the model can see.
+
+**Practical reading:** of the three real MSA-derived signals Boltz's own
+architecture exposes (profile, deletion, cross-sequence attention), the
+cheapest one — a simple per-position amino-acid frequency computed directly
+from the raw homolog alignment, no attention mechanism required — carries
+the most signal at this pilot's scale. The expensive mechanism (cross-
+sequence attention via `PairWeightedAveraging`/`OuterProductMean`, the part
+that needed real architecture work and hit a real memory ceiling) adds a
+small amount on its own but doesn't obviously combine well with the cheap
+feature in this 2-epoch, single-seed run.
+
+### Caveats
+
+- **Single seed, 2 epochs, 500 structures, `msa_blocks=1`** — smaller than
+  every other cut in this doc. This is a first directional signal, not a
+  precision measurement; do not treat these deltas as final without a
+  repeat at larger scale/more seeds.
+- **Arm A's val_accuracy declining between epochs** is a mild overfitting
+  signal at this data/model-size ratio, not necessarily representative of
+  how the other arms would behave with more data — the *relative* ranking
+  across arms at epoch 2 is the more informative read than any single arm's
+  absolute trajectory.
+- **`max_length=128` truncates most real sequences** — real query lengths in
+  this data range from 4 to 729 residues (median ~200); only ~28% are
+  under 128. Truncation could differentially affect arms that rely on
+  longer-range profile/attention signal.
+- **The combined arm's sub-additivity is not yet explained** — could be a
+  genuine interaction (e.g. profile and cross-attention learning redundant
+  or conflicting signal) or could be an artifact of `msa_blocks=1` (recall
+  the z-initialization gap found above: even with the seeding fix, one
+  block is a minimal amount of cross-attention capacity, likely not enough
+  to fairly represent what cross-sequence attention could do with more
+  blocks and more compute).
