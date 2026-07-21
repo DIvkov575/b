@@ -142,3 +142,62 @@ None of this has been run — this is the honest scope of "what it would take,"
 not a claim that it's been done. Given the ESMC-6B compute requirement, this
 would be a materially larger and more expensive follow-up than the original
 300M-scale L41 arc, not an afternoon's rerun.
+
+## Fresh literature check (2026-07-21) — is discrete-function steering at small scale a known-viable technique at all?
+
+Ran a dedicated, from-scratch literature scan (not reusing the earlier thin
+summary) specifically on: has anyone, anywhere, published activation
+steering of a protein LM toward a *discrete enzyme function* (e.g. kinase
+activity / a single EC number) using a *sub-1B model* and a *single
+direction* (SAE feature or difference-of-means)? Full citations below.
+
+**Finding: no. This exact combination has never been shown to work by
+anyone, and three independent, already-published findings explain why a
+first attempt would plausibly fail:**
+
+1. **Discrete function vs. continuous property.** Every published
+   single-direction steering success (Huang et al. 2509.07983, ICML 2025)
+   targets a smooth biophysical scalar — thermostability, solubility, GFP
+   brightness — never a discrete catalytic-function class. The one paper
+   that steered toward a function-like discrete concept (ProtSAE,
+   arXiv:2509.05309, "DNA-binding transcription repressor activity") needed
+   a **15B-parameter model** and a specially disentangled/hierarchical SAE,
+   not a raw direction, and still only reached partial (TM-score ~0.83)
+   similarity to the target concept — not a clean causal win.
+2. **Documented failure at almost exactly L41's scale.** ProGenMech/Circuit
+   Tracing (arXiv:2606.16044, ICML 2026 workshop) attempted causal steering
+   of a functional-fitness circuit on **ProGen3-112M** (smaller than but
+   comparable in class to L41's 300M) and found **no measurable effect** —
+   steered output was "distributionally indistinguishable" from baseline.
+   The authors explicitly attribute this to model scale and state they
+   expect it to work only after scaling up.
+3. **Raw SAE features are explicitly flagged as unreliable for causal
+   control**, independent of scale. The antibody-SAE paper (arXiv:2512.05794)
+   states directly: "high feature-concept correlation does not guarantee
+   causal control over generation" — only hierarchically-structured
+   ("Ordered") SAEs reliably produced steerable features in their tests.
+   L41 used a raw, off-the-shelf SAE decoder row, exactly the feature type
+   flagged as unreliable.
+
+Also confirmed: **no published or preprinted work combines ESM-C (the
+paper L41 was built on) with causal activation steering at all**, as of
+this search (checked the paper's own citation graph — 8 citing works, none
+perform steering). This part of the gap is real and still open. But "open"
+here means "nobody has gotten around to a harder, currently-unfavored
+combination" — not "a promising, under-explored opportunity."
+
+**Revised bottom line: L41's weak/null result is not an anomaly needing
+further investigation — it lands exactly where three independent,
+already-published findings predict a first attempt at this specific
+combination (small model + single raw direction + discrete function) would
+land.** A positive result would have been the surprising outcome. This is
+not a promising direction to keep pushing on with the current setup; the
+literature's one repeatedly-validated recipe for single-direction steering
+success is a continuous biophysical property (stability/solubility) on a
+mid-size model (viable candidates in the 650M-3B range), not a discrete
+enzyme function on a 300M model.
+
+Key sources: Huang et al. 2509.07983 (ICML 2025); ProtSAE 2509.05309 (AAAI
+2026); ProGenMech/Circuit Tracing 2606.16044 (ICML 2026 workshop); Antibody
+SAE steering 2512.05794; InterPLM 2412.12101; ESMC-SAE enzyme prediction
+2606.12209 (discriminative only, no steering).
