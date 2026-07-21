@@ -24,7 +24,9 @@ import src.l35.torch_scatter_compat_shim  # noqa: E402  (must precede diffcsp im
 import torch  # noqa: E402
 import yaml  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
+from p_tqdm import p_umap  # noqa: E402
 
+from src.l35.consistency_distill import ema_update  # noqa: E402
 from src.l35.training_step import consistency_distillation_loss  # noqa: E402
 
 
@@ -98,28 +100,80 @@ def load_teacher_and_schedulers(ckpt_path, hparams_path, device):
     return teacher_decoder, model.beta_scheduler.to(device), model.sigma_scheduler.to(device)
 
 
-def load_pilot_batches(data_csv, num_structures, batch_size, device):
+def process_one(*args, **kwargs):
+    """Thin re-export so tests can monkeypatch this module's own reference
+    (preprocess_with_cache calls the name bound here, not diffcsp's directly)
+    to assert a cache hit skips reprocessing entirely.
+    """
+    from diffcsp.common.data_utils import process_one as _process_one
+
+    return _process_one(*args, **kwargs)
+
+
+def preprocess_with_cache(data_csv, num_structures, cache_path, num_workers=None):
     """Preprocess the first num_structures rows of a real MP-20 CSV (real CIF
-    parsing via pymatgen, real graph construction via process_one()), grouped
-    into batches of batch_size. Slices the CSV before calling preprocess() --
-    DiffCSP's own preprocess() has no row-limit parameter.
+    parsing via pymatgen, real graph construction), caching the result to
+    cache_path. Mirrors diffcsp.pl_data.dataset.CrystDataset.preprocess()'s
+    own os.path.exists(save_path) -> torch.load / else preprocess+torch.save
+    convention. The cache is keyed by (data_csv, num_structures) stored
+    alongside the results, so a different num_structures against the same
+    cache_path is correctly treated as a miss rather than silently reusing a
+    cache built for a different slice.
+
+    Uses p_umap for real multi-core parallelism (num_workers=None lets
+    p_umap use all available cores), matching diffcsp.common.data_utils.
+    preprocess()'s own parallelization -- a plain sequential loop was a
+    real regression here: confirmed via `ps`/`top` on a live 4-vCPU EC2
+    instance mid-run (one process at 100% CPU, load average ~1.0/4, zero
+    worker child processes) leaving 3 of 4 cores idle. p_umap returns
+    results in COMPLETION order, not submission order, so results are
+    remapped back to the CSV's original row order via material_id, exactly
+    matching preprocess()'s own mpid_to_results dict-remap.
     """
     import pandas as pd
-    from diffcsp.common.data_utils import process_one
+
+    if os.path.exists(cache_path):
+        cached = torch.load(cache_path, weights_only=False)
+        if cached.get("data_csv") == data_csv and cached.get("num_structures") == num_structures:
+            return cached["results"]
 
     df = pd.read_csv(data_csv).iloc[:num_structures]
-    results = [
-        process_one(
-            df.iloc[idx],
-            niggli=True,
-            primitive=True,
-            graph_method="crystalnn",
-            prop_list=["formation_energy_per_atom"],
-            use_space_group=False,
-            tol=0.01,
-        )
-        for idx in range(len(df))
-    ]
+    unordered_results = p_umap(
+        process_one,
+        [df.iloc[idx] for idx in range(len(df))],
+        [True] * len(df),
+        [True] * len(df),
+        ["crystalnn"] * len(df),
+        [["formation_energy_per_atom"]] * len(df),
+        [False] * len(df),
+        [0.01] * len(df),
+        num_cpus=num_workers,
+    )
+    mpid_to_results = {result["mp_id"]: result for result in unordered_results}
+    results = [mpid_to_results[df.iloc[idx]["material_id"]] for idx in range(len(df))]
+
+    torch.save({"data_csv": data_csv, "num_structures": num_structures, "results": results}, cache_path)
+    return results
+
+
+def default_cache_path(data_csv, num_structures):
+    """Deterministic cache location next to the source CSV, keyed by
+    (csv filename, num_structures) so different pilots/full-runs against
+    the same split don't collide.
+    """
+    csv_dir = os.path.dirname(os.path.abspath(data_csv))
+    csv_name = os.path.splitext(os.path.basename(data_csv))[0]
+    return os.path.join(csv_dir, f".preprocess_cache_{csv_name}_{num_structures}.pt")
+
+
+def load_pilot_batches(data_csv, num_structures, batch_size, device, cache_path=None):
+    """Preprocess (cached) real MP-20 structures, grouped into batches of
+    batch_size. cache_path defaults to a deterministic location next to
+    data_csv if not given.
+    """
+    if cache_path is None:
+        cache_path = default_cache_path(data_csv, num_structures)
+    results = preprocess_with_cache(data_csv, num_structures, cache_path)
 
     batches = []
     for start in range(0, len(results), batch_size):
@@ -170,6 +224,19 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--checkpoint_out", type=str, default=None)
+    parser.add_argument(
+        "--log_every", type=int, default=1,
+        help="print loss/grad_norm/weight_norm every N steps (weight_norm walks all "
+        "params each time it's logged -- real but bounded overhead)",
+    )
+    parser.add_argument(
+        "--ema_mu", type=float, default=0.999,
+        help="EMA decay for the target network (Song et al. 2023 Eq. 8): "
+        "target <- mu*target + (1-mu)*student after every optimizer step. "
+        "Using the live student as its own target (mu effectively N/A, no EMA "
+        "at all) was confirmed to destabilize training at full-dataset scale "
+        "-- see training_step.py's module docstring.",
+    )
     args = parser.parse_args()
 
     device = pick_device()
@@ -188,6 +255,11 @@ def main():
         p.requires_grad_(True)  # deepcopy inherits requires_grad=False from the frozen teacher
     student.train()
 
+    target_network = copy.deepcopy(student)
+    for p in target_network.parameters():
+        p.requires_grad_(False)
+    target_network.eval()
+
     optimizer = torch.optim.Adam(student.parameters(), lr=args.lr)
 
     print(f"preprocessing {args.num_structures} real MP-20 structures from {args.data_csv}")
@@ -201,6 +273,7 @@ def main():
             loss, aux = consistency_distillation_loss(
                 teacher=teacher,
                 student=student,
+                target_network=target_network,
                 batch=batch,
                 num_steps=args.num_steps,
                 beta_scheduler=beta_scheduler,
@@ -210,12 +283,19 @@ def main():
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(student.parameters(), args.grad_clip_norm)
             optimizer.step()
-            print(
-                f"[epoch {epoch} step {step}] loss={loss.item():.6f} "
-                f"pre_clip_grad_norm={grad_norm.item():.3f} "  # clip_grad_norm_ returns the norm BEFORE clipping (docs); actual applied update is capped at --grad_clip_norm
-                f"t_n_mean={aux['t_n'].float().mean().item():.1f} "
-                f"t_next_mean={aux['t_next'].float().mean().item():.1f}"
-            )
+            ema_update(target_network, student, mu=args.ema_mu)
+            if step % args.log_every == 0:
+                with torch.no_grad():
+                    weight_norm = torch.sqrt(
+                        sum(p.detach().float().pow(2).sum() for p in student.parameters())
+                    )
+                print(
+                    f"[epoch {epoch} step {step}] loss={loss.item():.6f} "
+                    f"pre_clip_grad_norm={grad_norm.item():.3f} "  # clip_grad_norm_ returns the norm BEFORE clipping (docs); actual applied update is capped at --grad_clip_norm
+                    f"weight_norm={weight_norm.item():.3f} "
+                    f"t_n_mean={aux['t_n'].float().mean().item():.1f} "
+                    f"t_next_mean={aux['t_next'].float().mean().item():.1f}"
+                )
             step += 1
 
     if args.checkpoint_out:

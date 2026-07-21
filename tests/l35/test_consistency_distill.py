@@ -34,11 +34,15 @@ exactly half of DiffCSP's own predictor step_size = sigma_t^2 - sigma_next^2,
 with the stochastic term dropped.
 """
 import torch
+import torch.nn as nn
 
 from src.l35.consistency_distill import (
+    coord_forward_noise,
     coord_pfode_step,
     coord_x0_estimate,
+    ema_update,
     lattice_ddim_step,
+    lattice_forward_noise,
     lattice_x0_estimate,
     sample_index_pair,
 )
@@ -170,6 +174,72 @@ class TestCoordPfodeStep:
         assert (x_next < 1).all()
 
 
+class TestLatticeForwardNoise:
+    """Matches diffusion.py forward()'s exact noising formula:
+    input_lattice = sqrt(ac_t)*lattices + sqrt(1-ac_t)*rand_l -- the forward
+    process this whole distillation scheme distills a solver for, and which
+    an earlier version of training_step.py never actually applied.
+    """
+
+    def test_matches_diffusion_py_forward_noising_formula(self):
+        torch.manual_seed(10)
+        l_0 = torch.randn(2, 3, 3)
+        ac_t = torch.tensor([0.7, 0.3])
+        rand_l = torch.randn(2, 3, 3)
+
+        l_t = lattice_forward_noise(l_0, rand_l, ac_t)
+
+        c0 = torch.sqrt(ac_t).view(-1, 1, 1)
+        c1 = torch.sqrt(1 - ac_t).view(-1, 1, 1)
+        expected = c0 * l_0 + c1 * rand_l
+        assert torch.allclose(l_t, expected)
+
+    def test_exact_boundary_at_ac_one_ignores_noise(self):
+        l_0 = torch.randn(2, 3, 3)
+        rand_l = torch.randn(2, 3, 3) * 100.0
+        ac_t = torch.ones(2)
+
+        l_t = lattice_forward_noise(l_0, rand_l, ac_t)
+
+        assert torch.allclose(l_t, l_0, atol=1e-6)
+
+
+class TestCoordForwardNoise:
+    """Matches diffusion.py forward()'s exact noising formula:
+    input_frac_coords = (frac_coords + sigma_t*rand_x) % 1.
+    """
+
+    def test_matches_diffusion_py_forward_noising_formula(self):
+        torch.manual_seed(11)
+        x_0 = torch.rand(5, 3)
+        sigma_t = torch.full((5,), 0.3)
+        rand_x = torch.randn(5, 3)
+
+        x_t = coord_forward_noise(x_0, rand_x, sigma_t)
+
+        expected = (x_0 + sigma_t.view(-1, 1) * rand_x) % 1.0
+        assert torch.allclose(x_t, expected)
+
+    def test_exact_boundary_at_sigma_zero_ignores_noise(self):
+        x_0 = torch.rand(5, 3)
+        rand_x = torch.randn(5, 3) * 100.0
+        sigma_t = torch.zeros(5)
+
+        x_t = coord_forward_noise(x_0, rand_x, sigma_t)
+
+        assert torch.allclose(x_t, x_0 % 1.0, atol=1e-6)
+
+    def test_output_is_wrapped_into_unit_cell(self):
+        x_0 = torch.rand(5, 3)
+        rand_x = torch.randn(5, 3) * 50.0
+        sigma_t = torch.full((5,), 0.5)
+
+        x_t = coord_forward_noise(x_0, rand_x, sigma_t)
+
+        assert (x_t >= 0).all()
+        assert (x_t < 1).all()
+
+
 class TestSampleIndexPair:
     def test_returns_adjacent_indices_on_uniform_integer_grid(self):
         idx_n, idx_next = sample_index_pair(num_steps=8, max_index=1000, batch_size=100)
@@ -210,3 +280,61 @@ class TestSampleIndexPair:
 
         assert torch.equal(idx_n1, idx_n2)
         assert torch.equal(idx_next1, idx_next2)
+
+
+class TestEmaUpdate:
+    """ema_update implements Song et al. 2023 Eq. 8: theta_minus <- stopgrad(
+    mu*theta_minus + (1-mu)*theta) -- moves the target network's parameters
+    partway toward the (live, training) student's current parameters, never
+    the reverse and never in-place on the student.
+    """
+
+    def test_mu_one_leaves_target_completely_unchanged(self):
+        target = nn.Linear(3, 3)
+        student = nn.Linear(3, 3)
+        original_weight = target.weight.detach().clone()
+
+        ema_update(target, student, mu=1.0)
+
+        assert torch.equal(target.weight, original_weight)
+
+    def test_mu_zero_makes_target_exactly_equal_student(self):
+        target = nn.Linear(3, 3)
+        student = nn.Linear(3, 3)
+
+        ema_update(target, student, mu=0.0)
+
+        assert torch.equal(target.weight, student.weight)
+        assert torch.equal(target.bias, student.bias)
+
+    def test_mu_half_averages_target_and_student(self):
+        target = nn.Linear(2, 2, bias=False)
+        student = nn.Linear(2, 2, bias=False)
+        with torch.no_grad():
+            target.weight.copy_(torch.zeros(2, 2))
+            student.weight.copy_(torch.ones(2, 2) * 4.0)
+
+        ema_update(target, student, mu=0.5)
+
+        assert torch.allclose(target.weight, torch.ones(2, 2) * 2.0)
+
+    def test_target_network_stays_out_of_student_autograd_graph(self):
+        # ema_update must not create a graph connecting target's parameters
+        # back to student's -- it's an in-place buffer update, not a
+        # differentiable operation the student's own loss could backprop through.
+        target = nn.Linear(2, 2)
+        student = nn.Linear(2, 2)
+
+        ema_update(target, student, mu=0.9)
+
+        for p in target.parameters():
+            assert not p.requires_grad or p.grad_fn is None
+
+    def test_student_parameters_are_not_mutated(self):
+        target = nn.Linear(2, 2)
+        student = nn.Linear(2, 2)
+        original_student_weight = student.weight.detach().clone()
+
+        ema_update(target, student, mu=0.5)
+
+        assert torch.equal(student.weight, original_student_weight)

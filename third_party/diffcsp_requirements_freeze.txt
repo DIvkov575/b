@@ -11,6 +11,7 @@ charset-normalizer==3.4.9
 contourpy==1.3.3
 cycler==0.12.1
 dill==0.4.1
+dnspython==2.8.0
 einops==0.8.2
 filelock==3.29.0
 fonttools==4.63.0
@@ -27,6 +28,7 @@ kiwisolver==1.5.0
 lightning-utilities==0.15.3
 lxml==6.1.1
 MarkupSafe==3.0.3
+matminer==0.10.1
 matplotlib==3.11.0
 monty==2026.5.18
 mpmath==1.3.0
@@ -40,7 +42,8 @@ orjson==3.11.9
 p_tqdm==1.4.2
 packaging==26.2
 palettable==3.3.3
-pandas==3.0.3
+pandarallel==1.6.5
+pandas==2.3.3
 pathos==0.3.5
 pillow==12.3.0
 plotly==6.9.0
@@ -52,6 +55,7 @@ psutil==7.2.2
 Pygments==2.20.0
 pymatgen==2026.5.4
 pymatgen-core==2026.5.18
+pymongo==4.17.0
 pyocse==0.1.3
 pyparsing==3.3.2
 PySocks==1.7.1
@@ -59,6 +63,7 @@ pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 pytorch-lightning==2.6.5
+pytz==2026.2
 pyxtal==1.1.4
 PyYAML==6.0.3
 requests==2.34.2
@@ -66,6 +71,7 @@ ruamel.yaml==0.19.1
 scikit-learn==1.9.0
 scipy==1.17.1
 six==1.17.0
+SMACT==3.2.0
 soupsieve==2.8.4
 spglib==2.7.0
 sympy==1.14.0
@@ -77,6 +83,7 @@ torch-geometric==2.8.0
 torchmetrics==1.9.0
 tqdm==4.68.4
 typing_extensions==4.15.0
+tzdata==2026.3
 uncertainties==3.2.3
 urllib3==2.7.0
 vasprun-xml==1.0.4

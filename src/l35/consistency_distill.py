@@ -10,6 +10,28 @@ formula applied to a wrapped (not Gaussian) kernel -- a flagged approximation.
 import torch
 
 
+def lattice_forward_noise(l_0, rand_l, alphas_cumprod_t):
+    """Forward-noises a clean lattice to alphas_cumprod_t, matching
+    diffusion.py forward()'s exact formula: input_lattice = sqrt(ac_t)*lattices
+    + sqrt(1-ac_t)*rand_l. This is the process the whole distillation scheme
+    trains a solver for -- consistency-distillation training pairs must be
+    built from genuinely noised data, not the clean batch itself.
+    """
+    shape = (l_0.shape[0],) + (1,) * (l_0.dim() - 1)
+    c0 = torch.sqrt(alphas_cumprod_t).view(shape)
+    c1 = torch.sqrt(1.0 - alphas_cumprod_t).view(shape)
+    return c0 * l_0 + c1 * rand_l
+
+
+def coord_forward_noise(x_0, rand_x, sigma_t):
+    """Forward-noises clean fractional coordinates to sigma_t, matching
+    diffusion.py forward()'s exact formula: input_frac_coords =
+    (frac_coords + sigma_t*rand_x) % 1.
+    """
+    shape = (x_0.shape[0],) + (1,) * (x_0.dim() - 1)
+    return (x_0 + sigma_t.view(shape) * rand_x) % 1.0
+
+
 def lattice_x0_estimate(l_t, pred_eps, alphas_cumprod_t):
     """DDIM/Tweedie x0-estimate for the lattice's VP/epsilon-prediction track.
 
@@ -75,3 +97,17 @@ def sample_index_pair(num_steps, max_index, batch_size, generator=None):
     grid = torch.linspace(0, max_index - 1, num_steps + 1).round().long()
     idx = torch.randint(0, num_steps, (batch_size,), generator=generator)
     return grid[idx], grid[idx + 1]
+
+
+@torch.no_grad()
+def ema_update(target_network, student, mu):
+    """theta_minus <- stopgrad(mu*theta_minus + (1-mu)*theta) (Song et al.
+    2023, Consistency Models, Eq. 8). Moves target_network's parameters
+    partway toward student's current parameters, in place, with no
+    autograd graph connecting the two (this IS the fix for the divergence
+    documented in training_step.py's module docstring: using the live
+    student as its own target, rather than an EMA history of it, was
+    empirically confirmed to destabilize training at scale).
+    """
+    for target_param, student_param in zip(target_network.parameters(), student.parameters()):
+        target_param.mul_(mu).add_(student_param, alpha=1.0 - mu)

@@ -8,18 +8,46 @@ and were taken directly from diffcsp/pl_modules/diffusion.py, not re-derived:
   - pred_x is a NORMALIZED score; sample() rescales it via `pred_x * sqrt(sigma_norm)`
     before using it as the true score fed to the annealed-Langevin update.
 
-Self-distillation (student targets itself one step ahead), matching L37's
-consistency_distill training_step structure -- teacher is frozen/stop-gradient,
-student is trained so its own boundary-condition output at t_n matches a
-stop-gradient copy of its output at t_next, where t_next's input was produced
-by ONE deterministic teacher step from t_n.
+Consistency distillation against an EMA target network (Song et al. 2023,
+"Consistency Models", Eq. 8), not the live student itself. The original
+paper explicitly measured that setting the target network theta_minus equal
+to the live online network theta (rather than an EMA of its history)
+destabilizes training; theta_minus == theta is expected only asymptotically,
+at convergence. A first version of this module used the live student as its
+own target (matching L37's training_step.py structure) and reproduced
+exactly this instability empirically: a 256-structure/30-epoch local pilot
+stayed bounded, but a 27,136-structure/15-epoch full run diverged (loss
+grew ~300x even with gradient clipping) -- consistent with a slow systematic
+bias compounding over the ~13x-larger step count, which per-step gradient
+clipping (bounding update magnitude, not directional bias) cannot fix.
+See docs/L35_PIPELINE_SPEC.md for the full incident writeup.
+
+Follows Song et al. 2023 Algorithm 2 (Consistency Distillation) exactly:
+starting from the REAL, clean batch, forward-noise it up to the noisier of
+the sampled index pair (idx_next), run the teacher there and take one ODE
+step down to the less-noisy index (idx_n) to build the target input, then
+compare the student's consistency function at (noised-to-idx_next, idx_next)
+against the target network's at (teacher-denoised-to-idx_n, idx_n). A first
+version of this module skipped forward-noising entirely -- it fed the RAW,
+CLEAN batch straight into every decoder call (student at idx_n, target at
+idx_next -- also the wrong way around), mislabeled with fake timestep
+indices. That version ran a real 27,136-structure/15-epoch EC2 training job
+to completion (loss climbed smoothly and continuously, ~1,248 to ~200,000,
+while weight_norm stayed frozen, since lr=1e-6 + grad clipping bounded each
+step tightly) and the resulting "distilled" student scored WORSE
+(match_rate=0.0, valid=0.48) than simply truncating the UNTRAINED teacher to
+the same 8-step count (match_rate=0.18, valid=0.90) -- consistent with
+training against a target with no real relationship to the input, since the
+decoder was always being asked to denoise data that was already clean.
 """
 import torch
 
 from src.l35.consistency_distill import (
+    coord_forward_noise,
     coord_pfode_step,
     coord_x0_estimate,
     lattice_ddim_step,
+    lattice_forward_noise,
     lattice_x0_estimate,
     sample_index_pair,
 )
@@ -49,7 +77,7 @@ def _decoder_step(decoder, l_t, x_t, atom_types, num_atoms, node2graph, t_index,
 
 
 def consistency_distillation_loss(
-    teacher, student, batch, num_steps, beta_scheduler, sigma_scheduler, generator=None
+    teacher, student, target_network, batch, num_steps, beta_scheduler, sigma_scheduler, generator=None
 ):
     """One consistency-distillation training step over a toy/real DiffCSP batch.
 
@@ -58,6 +86,11 @@ def consistency_distillation_loss(
             lattices, num_atoms, node2graph) -> (pred_l, pred_x). No gradient flows into
             it regardless of its own requires_grad state (wrapped in no_grad).
         student: trainable decoder with the same calling convention.
+        target_network: the "target"/online-EMA network (Song et al. 2023 Eq. 8) used
+            to compute the training target -- must NOT be the live student itself (see
+            module docstring for why). No gradient flows into it regardless of its own
+            requires_grad state (wrapped in no_grad, same guarantee as teacher). Callers
+            own updating it (e.g. an EMA step after each optimizer.step()).
         batch: dict with keys num_atoms, node2graph, atom_types, frac_coords, lattices.
         num_steps: number of steps on DiffCSP's {0, ..., timesteps} grid to sample from.
         beta_scheduler: a real diffcsp.pl_modules.diff_utils.BetaScheduler instance
@@ -93,27 +126,48 @@ def consistency_distillation_loss(
     sigma_n_per_atom = sigma_n.repeat_interleave(num_atoms)
     sigma_next_per_atom = sigma_next.repeat_interleave(num_atoms)
 
-    l_n = batch["lattices"]
-    x_n = batch["frac_coords"]
+    l_0 = batch["lattices"]
+    x_0 = batch["frac_coords"]
+
+    # Fresh Gaussian noise, drawn on CPU via the (optional) generator then
+    # moved to the batch's device -- same generator-stays-CPU convention
+    # sample_index_pair already uses, avoiding the CPU/CUDA generator-device
+    # mismatch caught once already in evaluate.py's sampler.
+    rand_l = torch.randn(l_0.shape, generator=generator).to(l_0.device)
+    rand_x = torch.randn(x_0.shape, generator=generator).to(x_0.device)
+
+    # Forward-noise the real, clean batch up to the NOISIER of the sampled
+    # index pair (idx_next), matching diffusion.py forward()'s exact noising
+    # formula (Song et al. 2023 Algorithm 2: x_{t_{n+1}} ~ N(x, t_{n+1}^2 I)).
+    # An earlier version skipped this and fed the clean batch itself into
+    # every decoder call under a fake timestep label -- see module docstring.
+    l_next = lattice_forward_noise(l_0, rand_l, ac_next)
+    x_next = coord_forward_noise(x_0, rand_x, sigma_next_per_atom)
 
     with torch.no_grad():
-        pred_l_n, score_n = _decoder_step(
-            teacher, l_n, x_n, atom_types, num_atoms, node2graph, idx_n, sigma_n, sigma_norm_n
+        # Teacher takes ONE deterministic ODE step from idx_next down to the
+        # less-noisy idx_n (the numerical solver step in Algorithm 2),
+        # building \hat{x}_{t_n}^\phi -- the target network's input.
+        pred_l_next, score_next = _decoder_step(
+            teacher, l_next, x_next, atom_types, num_atoms, node2graph, idx_next, sigma_next, sigma_norm_next
         )
-        l_next = lattice_ddim_step(l_n, pred_l_n, ac_n, ac_next)
-        x_next = coord_pfode_step(x_n, score_n, sigma_n_per_atom, sigma_next_per_atom)
+        l_n_hat = lattice_ddim_step(l_next, pred_l_next, ac_next, ac_n)
+        x_n_hat = coord_pfode_step(x_next, score_next, sigma_next_per_atom, sigma_n_per_atom)
 
         target_pred_l, target_score = _decoder_step(
-            student, l_next, x_next, atom_types, num_atoms, node2graph, idx_next, sigma_next, sigma_norm_next
+            target_network, l_n_hat, x_n_hat, atom_types, num_atoms, node2graph, idx_n, sigma_n, sigma_norm_n
         )
-        target_l0 = lattice_x0_estimate(l_next, target_pred_l, ac_next)
-        target_x0 = coord_x0_estimate(x_next, target_score, sigma_next_per_atom)
+        target_l0 = lattice_x0_estimate(l_n_hat, target_pred_l, ac_n)
+        target_x0 = coord_x0_estimate(x_n_hat, target_score, sigma_n_per_atom)
 
+    # Student's consistency function is evaluated at the SAME noised point
+    # the teacher started its solver step from (x_{t_{n+1}}, t_{n+1}) --
+    # not at idx_n, and not on clean data (see module docstring).
     student_pred_l, student_score = _decoder_step(
-        student, l_n, x_n, atom_types, num_atoms, node2graph, idx_n, sigma_n, sigma_norm_n
+        student, l_next, x_next, atom_types, num_atoms, node2graph, idx_next, sigma_next, sigma_norm_next
     )
-    pred_l0 = lattice_x0_estimate(l_n, student_pred_l, ac_n)
-    pred_x0 = coord_x0_estimate(x_n, student_score, sigma_n_per_atom)
+    pred_l0 = lattice_x0_estimate(l_next, student_pred_l, ac_next)
+    pred_x0 = coord_x0_estimate(x_next, student_score, sigma_next_per_atom)
 
     loss_lattice = torch.nn.functional.mse_loss(pred_l0, target_l0)
     loss_coord = torch.nn.functional.mse_loss(pred_x0, target_x0)

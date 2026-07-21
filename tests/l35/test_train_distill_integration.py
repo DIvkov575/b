@@ -118,12 +118,16 @@ def test_real_teacher_checkpoint_plus_real_data_runs_real_training_step():
     student = copy.deepcopy(teacher)
     for p in student.parameters():
         p.requires_grad_(True)
+    target_network = copy.deepcopy(student)
+    for p in target_network.parameters():
+        p.requires_grad_(False)
 
     batch = _real_batch(device, n=3)
 
     loss, aux = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,
@@ -138,6 +142,8 @@ def test_real_teacher_checkpoint_plus_real_data_runs_real_training_step():
 
     for p in teacher.parameters():
         assert p.grad is None, "real teacher must be frozen"
+    for p in target_network.parameters():
+        assert p.grad is None, "real EMA target network must be frozen"
     student_grads = [p.grad for p in student.parameters()]
     assert all(g is not None for g in student_grads), "real student must receive gradients on every param"
     assert all(torch.isfinite(g).all() for g in student_grads), "no NaN/Inf gradients"
@@ -154,6 +160,9 @@ def test_real_adam_step_actually_changes_student_weights():
     student = copy.deepcopy(teacher)
     for p in student.parameters():
         p.requires_grad_(True)
+    target_network = copy.deepcopy(student)
+    for p in target_network.parameters():
+        p.requires_grad_(False)
 
     before = {name: p.detach().clone() for name, p in student.named_parameters()}
     optimizer = torch.optim.Adam(student.parameters(), lr=1e-3)
@@ -162,6 +171,7 @@ def test_real_adam_step_actually_changes_student_weights():
     loss, _ = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,

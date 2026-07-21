@@ -103,10 +103,12 @@ def test_teacher_receives_no_gradient_student_does():
 
     teacher = LinearDecoder()
     student = LinearDecoder()
+    target_network = copy.deepcopy(student)
 
     loss, _ = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,
@@ -117,8 +119,42 @@ def test_teacher_receives_no_gradient_student_does():
 
     for p in teacher.parameters():
         assert p.grad is None, "teacher must be frozen (stop-gradient target)"
+    for p in target_network.parameters():
+        assert p.grad is None, "EMA target network must be frozen (stop-gradient target)"
     for p in student.parameters():
         assert p.grad is not None, "student must receive gradients"
+
+
+def test_target_network_receives_no_gradient_even_when_it_requires_grad():
+    # Regression guard: an EMA target network's parameters might still have
+    # requires_grad=True (e.g. before the caller detaches it) -- the loss
+    # function itself must wrap the target-network forward pass in no_grad
+    # regardless of the target network's own requires_grad state, the same
+    # guarantee already held for `teacher`.
+    torch.manual_seed(0)
+    batch = _toy_batch()
+    beta_scheduler, sigma_scheduler = _real_schedulers()
+
+    teacher = LinearDecoder()
+    student = LinearDecoder()
+    target_network = copy.deepcopy(student)
+    for p in target_network.parameters():
+        p.requires_grad_(True)  # deliberately NOT detached, to test the loss fn's own guarantee
+
+    loss, _ = consistency_distillation_loss(
+        teacher=teacher,
+        student=student,
+        target_network=target_network,
+        batch=batch,
+        num_steps=8,
+        beta_scheduler=beta_scheduler,
+        sigma_scheduler=sigma_scheduler,
+        generator=torch.Generator().manual_seed(1),
+    )
+    loss.backward()
+
+    for p in target_network.parameters():
+        assert p.grad is None, "target network must receive no gradient regardless of requires_grad"
 
 
 def test_deepcopied_student_still_receives_gradient():
@@ -135,10 +171,12 @@ def test_deepcopied_student_still_receives_gradient():
     student = copy.deepcopy(teacher)
     for p in student.parameters():
         p.requires_grad_(True)
+    target_network = copy.deepcopy(student)
 
     loss, _ = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,
@@ -157,10 +195,12 @@ def test_loss_is_finite_and_positive_for_disagreeing_teacher_and_student():
 
     teacher = ConstantDecoder(pred_l=torch.randn(3, 3), pred_x=torch.randn(3))
     student = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
+    target_network = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
 
     loss, aux = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,
@@ -180,10 +220,12 @@ def test_aux_timesteps_are_within_scheduler_bounds():
     beta_scheduler, sigma_scheduler = _real_schedulers()
     teacher = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
     student = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
+    target_network = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
 
     _, aux = consistency_distillation_loss(
         teacher=teacher,
         student=student,
+        target_network=target_network,
         batch=batch,
         num_steps=8,
         beta_scheduler=beta_scheduler,
@@ -194,6 +236,129 @@ def test_aux_timesteps_are_within_scheduler_bounds():
     assert (aux["t_n"] >= 0).all() and (aux["t_n"] <= 1000).all()
     assert (aux["t_next"] >= 0).all() and (aux["t_next"] <= 1000).all()
     assert (aux["t_next"] > aux["t_n"]).all()
+
+
+def test_student_and_target_are_evaluated_on_genuinely_noised_data_not_clean_ground_truth():
+    # Regression test for a real bug: an earlier version fed the RAW, CLEAN
+    # batch lattices/frac_coords directly into every decoder call, mislabeled
+    # with fake timestep indices -- no forward-noising ever happened at all.
+    # Consistency distillation (Song et al. 2023 Algorithm 2) requires
+    # x_{t_{n+1}} = x + t_{n+1}*z, a genuinely noised sample at the noisier of
+    # the sampled index pair -- not the clean data itself. Confirmed via a
+    # real full-dataset EC2 training run: the resulting "distilled" student
+    # scored WORSE (match_rate=0.0) than simply truncating the untrained
+    # teacher to the same step count (match_rate=0.18), consistent with
+    # training against an incoherent objective.
+    torch.manual_seed(0)
+    batch = _toy_batch()
+    beta_scheduler, sigma_scheduler = _real_schedulers()
+
+    class RecordingDecoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+            self.linear_l = nn.Linear(9, 9)
+            self.linear_x = nn.Linear(3, 3)
+
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            self.calls.append({
+                "time_emb": time_emb.detach().clone(),
+                "frac_coords": frac_coords.detach().clone(),
+                "lattices": lattices.detach().clone(),
+            })
+            batch_size = lattices.shape[0]
+            pred_l = self.linear_l(lattices.reshape(batch_size, 9)).reshape(batch_size, 3, 3)
+            pred_x = self.linear_x(frac_coords)
+            return pred_l, pred_x
+
+    teacher = RecordingDecoder()
+    student = RecordingDecoder()
+    target_network = copy.deepcopy(student)
+
+    import src.l35.training_step as training_step_module
+
+    original = training_step_module.sample_index_pair
+    training_step_module.sample_index_pair = lambda *a, **k: (
+        torch.zeros(2, dtype=torch.long), torch.full((2,), 500, dtype=torch.long)
+    )
+    try:
+        consistency_distillation_loss(
+            teacher=teacher,
+            student=student,
+            target_network=target_network,
+            batch=batch,
+            num_steps=8,
+            beta_scheduler=beta_scheduler,
+            sigma_scheduler=sigma_scheduler,
+            generator=torch.Generator().manual_seed(1),
+        )
+    finally:
+        training_step_module.sample_index_pair = original
+
+    student_call = student.calls[-1]
+    assert not torch.allclose(student_call["frac_coords"], batch["frac_coords"])
+    assert not torch.allclose(student_call["lattices"], batch["lattices"])
+
+    target_call = target_network.calls[-1]
+    assert not torch.allclose(target_call["frac_coords"], batch["frac_coords"])
+    assert not torch.allclose(target_call["lattices"], batch["lattices"])
+
+
+def test_student_and_target_are_evaluated_at_their_respective_correct_timesteps():
+    # The other half of the same bug: the student must see the NOISIER index
+    # (idx_next) and the target network the LESS-noisy index (idx_n) -- the
+    # opposite assignment an earlier version used (student at idx_n, target
+    # at idx_next).
+    torch.manual_seed(0)
+    batch = _toy_batch()
+    beta_scheduler, sigma_scheduler = _real_schedulers()
+
+    from src.l35.training_step import _sinusoidal_time_embedding
+
+    class RecordingDecoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+            self.linear_l = nn.Linear(9, 9)
+            self.linear_x = nn.Linear(3, 3)
+
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            self.calls.append(time_emb.detach().clone())
+            batch_size = lattices.shape[0]
+            pred_l = self.linear_l(lattices.reshape(batch_size, 9)).reshape(batch_size, 3, 3)
+            pred_x = self.linear_x(frac_coords)
+            return pred_l, pred_x
+
+    teacher = RecordingDecoder()
+    student = RecordingDecoder()
+    target_network = copy.deepcopy(student)
+
+    idx_n = torch.zeros(2, dtype=torch.long)
+    idx_next = torch.full((2,), 500, dtype=torch.long)
+
+    import src.l35.training_step as training_step_module
+
+    original = training_step_module.sample_index_pair
+    training_step_module.sample_index_pair = lambda *a, **k: (idx_n, idx_next)
+    try:
+        consistency_distillation_loss(
+            teacher=teacher,
+            student=student,
+            target_network=target_network,
+            batch=batch,
+            num_steps=8,
+            beta_scheduler=beta_scheduler,
+            sigma_scheduler=sigma_scheduler,
+            generator=torch.Generator().manual_seed(1),
+        )
+    finally:
+        training_step_module.sample_index_pair = original
+
+    expected_time_emb_next = _sinusoidal_time_embedding(idx_next.float())
+    expected_time_emb_n = _sinusoidal_time_embedding(idx_n.float())
+
+    assert torch.allclose(student.calls[-1], expected_time_emb_next)
+    assert torch.allclose(target_network.calls[-1], expected_time_emb_n)
 
 
 def test_loss_uses_real_sigma_norm_not_a_sigma_squared_approximation():
@@ -217,6 +382,7 @@ def test_loss_uses_real_sigma_norm_not_a_sigma_squared_approximation():
     batch = _toy_batch(batch_size=1, num_atoms_per=3)
     teacher = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.ones(3))
     student = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
+    target_network = ConstantDecoder(pred_l=torch.zeros(3, 3), pred_x=torch.zeros(3))
 
     class FixedIndexPair:
         @staticmethod
@@ -237,6 +403,7 @@ def test_loss_uses_real_sigma_norm_not_a_sigma_squared_approximation():
         real_loss, _ = consistency_distillation_loss(
             teacher=teacher,
             student=student,
+            target_network=target_network,
             batch=batch,
             num_steps=8,
             beta_scheduler=beta_scheduler,
@@ -245,6 +412,7 @@ def test_loss_uses_real_sigma_norm_not_a_sigma_squared_approximation():
         naive_loss, _ = consistency_distillation_loss(
             teacher=teacher,
             student=student,
+            target_network=target_network,
             batch=batch,
             num_steps=8,
             beta_scheduler=beta_scheduler,
