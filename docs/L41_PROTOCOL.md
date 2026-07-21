@@ -197,6 +197,38 @@ alpha. **This is a clean, statistically unambiguous negative result, not a
 suppressed effect hiding behind noise** — full numbers:
 `src/l38/l41_gate3_results.json`.
 
+## Post-hoc verification (2026-07-21, prompted by "have you checked all components?")
+
+Two checks done after the initial write-up, closing gaps that were previously
+just assumed:
+
+1. **Layer-indexing alignment.** Gate 1 reads `output.hidden_states[20]` to
+   find the feature; Gate 2 hooks `model.transformer.blocks[20]` directly.
+   Verified these are the exact same tensor (`torch.allclose`, max abs diff =
+   0.0) — not off-by-one (confirmed `blocks[19]`'s output does NOT match
+   `hidden_states[20]`, ruling out the classic hidden-states-includes-
+   embedding-layer indexing trap).
+2. **Intervention-works-at-the-source check.** Re-encoded the *steered*
+   hidden state back through the SAE and confirmed feature 7196's own
+   activation rises by ≈alpha (e.g. +5.14 at alpha=5, +20.54 at alpha=20,
+   consistent across 3 independent sequences and matching the near-unit-norm
+   steering vector's expected linear contribution). This confirms the causal
+   chain's first link — hook → target feature activation — is mechanically
+   correct, not silently broken.
+
+**What this changes:** the Gate 3 null is not explained by a plumbing bug
+(wrong layer, inert hook, mis-normalized vector). The break, if there is one,
+is specifically between "feature 7196 fires harder" and "generation shifts
+toward kinase-like sequence" — i.e. either this single SAE decoder direction
+at 300M scale isn't causally load-bearing enough on its own to move
+generation (plausible under superposition — other features may carry
+competing or overlapping signal), or activating it strongly doesn't
+correspond to "produce a more kinase-like sequence" in a way that survives
+discretization back to amino acids. This was not isolated further (would
+require, e.g., ablation studies or an intermediate readout between the
+feature and the final sequence) — recorded as the honest boundary of what
+was checked, not resolved.
+
 ## Honest interpretation
 
 The specific, narrow claim under test — *adding this one SAE decoder
