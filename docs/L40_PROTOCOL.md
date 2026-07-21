@@ -3,6 +3,32 @@
 **Pre-registered 2026-07-21, before the real run.** Locks the comparison
 method and pinned-split invariant before seeing pilot results.
 
+## Provenance
+
+- **Code:** `src/l40/` in this repo, commits `76d23de0`..`06f5cbff`
+  (2026-07-21). Ported from [PFold](https://github.com/DIvkov575/PFold)
+  commit `f44eecc`; ablation-specific code (baseline fetcher/dataset,
+  shared trainer, comparator) has no PFold equivalent — see `src/l40/README.md`
+  for the file-by-file breakdown.
+- **Environment:** `.venv-l38` — Python 3.11.15, `torch==2.13.0`, run on
+  Apple Silicon (MPS backend, no CUDA available).
+- **Tests:** `tests/l40/` — 49 tests, all passing as of the commits above
+  (`.venv-l38/bin/python -m pytest tests/l40/ -v`).
+- **Raw data:**
+  - Boltz slice: 2344 real `.npz` shards, byte-range-fetched from
+    `s3://boltz1.s3.us-east-2.amazonaws.com/rcsb_processed_msa.tar`
+    (public, no auth). Not committed (large binaries) — `data/l40_pilot/`
+    is gitignored; re-fetch via the command in `src/l40/README.md`.
+  - RCSB baseline: `data/l40_pilot/rcsb_baseline.jsonl`, fetched live via
+    `src/l40/fetch_rcsb_structures.py` against
+    `https://www.rcsb.org/fasta/chain/{PDBID}.{CHAIN}` — 2344/2344 succeeded,
+    0 failures. Also gitignored; regenerate via the same script.
+- **Result artifacts (committed, small JSON):** `src/l40/pilot_out/
+  {boltz,baseline,boltz_seqs1}_results.json` — per-epoch train/val
+  loss+accuracy for all three training runs referenced below.
+- **Reproduction commands:** `src/l40/README.md` § "Reproducing the pilot"
+  has the exact CLI invocations, including the disambiguation run.
+
 ## Hypothesis
 
 Training PFold's ProteinBERT MLM on Boltz's MSA-derived homolog sequences

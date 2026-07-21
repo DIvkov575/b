@@ -58,31 +58,52 @@ The RCSB baseline is a JSONL file, one line per structure:
 
 ## Reproducing the pilot
 
+Exact commands and provenance (commit SHAs, environment, raw metrics) are
+pinned in `docs/L40_PROTOCOL.md` — this is the abbreviated version:
+
 ```bash
 # 1. Get a slice of Boltz's data (full tar is ~107GB; HTTP Range works for a subset)
+mkdir -p data/l40_pilot/npz
 curl -s -r 0-1600000000 "https://boltz1.s3.us-east-2.amazonaws.com/rcsb_processed_msa.tar" \
   | tar -x --strip-components=1 -C data/l40_pilot/npz
-# (drop the last, truncated .npz — the range cuts it off mid-file)
+# Drop the last file in the listing — the byte range cuts it off mid-file,
+# so it's a truncated/invalid .npz (numpy will raise BadZipFile on load).
 
-# 2. Fetch the matching RCSB baseline sequences
+# 2. Fetch the matching RCSB baseline sequences (2344 real requests, ~0.1s apart —
+# takes a few minutes; resumable, safe to re-run if interrupted)
 .venv-l38/bin/python -m src.l40.fetch_rcsb_structures \
-  --npz-dir data/l40_pilot/npz --out data/l40_pilot/rcsb_baseline.jsonl --max-structures 2500
+  --npz-dir data/l40_pilot/npz --out data/l40_pilot/rcsb_baseline.jsonl \
+  --max-structures 2344 --sleep-seconds 0.05
 
-# 3. Train both variants with identical hyperparameters
+# 3a. Train the boltz variant (main comparison: MSA-homolog augmented)
 .venv-l38/bin/python -m src.l40.train_pilot --variant boltz \
-  --data-path data/l40_pilot/npz --max-files 2344 --epochs 3 --sequences-per-file 5
-.venv-l38/bin/python -m src.l40.train_pilot --variant baseline \
-  --data-path data/l40_pilot/rcsb_baseline.jsonl --max-files 2344 --epochs 3
+  --data-path data/l40_pilot/npz --max-files 2344 --epochs 3 --batch-size 32 \
+  --sequences-per-file 5 --d-model 128 --n-layers 4 --n-heads 4 --d-ff 512 --seed 0
 
-# 4. Compare
+# 3b. Train the baseline variant (1 sequence/structure, no augmentation)
+.venv-l38/bin/python -m src.l40.train_pilot --variant baseline \
+  --data-path data/l40_pilot/rcsb_baseline.jsonl --max-files 2344 --epochs 3 --batch-size 32 \
+  --d-model 128 --n-layers 4 --n-heads 4 --d-ff 512 --seed 0
+
+# 3c. Disambiguation run: boltz with sequences_per_file=1 — isolates curation
+# from training-volume by matching the baseline's step count exactly
+.venv-l38/bin/python -m src.l40.train_pilot --variant boltz \
+  --data-path data/l40_pilot/npz --max-files 2344 --epochs 3 --batch-size 32 \
+  --sequences-per-file 1 --d-model 128 --n-layers 4 --n-heads 4 --d-ff 512 --seed 0 \
+  --out-path src/l40/pilot_out/boltz_seqs1_results.json
+
+# 4. Compare (repeat with --boltz pointed at boltz_seqs1_results.json for the
+# disambiguation comparison)
 .venv-l38/bin/python -m src.l40.compare_results \
   --boltz src/l40/pilot_out/boltz_results.json \
   --baseline src/l40/pilot_out/baseline_results.json
 ```
 
-Requires a torch-enabled venv (`.venv-l38`). On Apple Silicon / MPS,
-`train_pilot.py` sets `PYTORCH_ENABLE_MPS_FALLBACK=1` itself —
-`nn.TransformerEncoder`'s padding-mask fast path calls an op MPS doesn't
-implement.
+Requires a torch-enabled venv (`.venv-l38`, Python 3.11, `torch==2.13.0`). On
+Apple Silicon / MPS, `train_pilot.py` sets `PYTORCH_ENABLE_MPS_FALLBACK=1`
+itself — `nn.TransformerEncoder`'s padding-mask fast path calls an op MPS
+doesn't implement (`aten::_nested_tensor_from_mask_left_aligned`).
 
-Tests: `tests/l40/` (`.venv-l38/bin/python -m pytest tests/l40/ -v`).
+Tests: `tests/l40/` (`.venv-l38/bin/python -m pytest tests/l40/ -v` — 49
+tests, ~85s, no network calls, no GPU required though MPS/CUDA is used if
+present).
