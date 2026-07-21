@@ -11,9 +11,10 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from src.l40.mlm_common import apply_mlm_masking, pad_or_truncate
+from src.l40.msa_data import create_diverse_splits
 from src.l40.msa_features import compute_deletion_features, compute_profile
 from src.l40.taxonomy_sampling import sample_diverse_homologs
 from src.l40.vocab import MASK_TOKEN, PAD_TOKEN, VOCAB_SIZE
@@ -139,3 +140,32 @@ class MSAAwareDataset(Dataset):
             'source_file': record['filename'],
             'seq_length': seq_len,
         }
+
+
+def create_msa_aware_dataloaders(data_dir: str, batch_size: int = 32, max_length: int = 512,
+                                  max_files: int = 1000, msa_depth: int = 8,
+                                  mask_prob: float = 0.15
+                                  ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Same file-level split as msa_data.create_dataloaders (same
+    create_diverse_splits seed) so the full-ablation arms and the earlier
+    training-volume-ablation arms compare against an identical structure
+    population and train/val/test assignment."""
+    file_sequences = load_msa_aware_protein_data(data_dir, max_files=max_files)
+
+    train_sequences, val_sequences, test_sequences = create_diverse_splits(
+        file_sequences, max_seqs_per_file_train=1, max_seqs_per_file_val=1,
+    )
+
+    train_dataset = MSAAwareDataset(train_sequences, max_length=max_length, msa_depth=msa_depth,
+                                     mask_prob=mask_prob, fixed_seed=42)
+    val_dataset = MSAAwareDataset(val_sequences, max_length=max_length, msa_depth=msa_depth,
+                                   mask_prob=mask_prob, fixed_seed=123)
+    test_dataset = MSAAwareDataset(test_sequences, max_length=max_length, msa_depth=msa_depth,
+                                    mask_prob=mask_prob, fixed_seed=456)
+
+    num_workers = min(4, os.cpu_count() or 1)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    return train_loader, val_loader, test_loader
