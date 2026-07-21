@@ -26,3 +26,8 @@ third_party/mdgen/
 third_party/diffcsp/
 third_party/diffcsp_checkpoints/
 .venv-diffcsp/
+
+# L38: local venv (reproducible via docs/L38_PROTOCOL.md); vendored ProteinMPNN lives
+# only on the EC2 host (fetched via tarball, not committed — large binary weights)
+.venv-l38/
+src/l38/vendor/

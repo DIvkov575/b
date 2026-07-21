@@ -1,0 +1,18 @@
+{
+  "version": "v2_bert_style_masking",
+  "base_phage_loss": 2.5442392580716686,
+  "base_phage_ppl": 12.733537673950195,
+  "base_general_loss": 2.3184515604690175,
+  "base_general_ppl": 10.159931182861328,
+  "final_phage_loss": 1.730619013342146,
+  "final_phage_ppl": 5.644146919250488,
+  "final_general_loss": 2.3982327348566463,
+  "final_general_ppl": 11.00371265411377,
+  "phage_loss_improvement": 0.8136202447295227,
+  "phage_ppl_improvement_pct": 55.67495016882011,
+  "n_train": 17982,
+  "n_phage_eval": 1998,
+  "n_general_eval": 1996,
+  "n_epochs": 3,
+  "model": "facebook/esm2_t12_35M_UR50D"
+}
