@@ -178,3 +178,45 @@ non-trivially at this small a pilot scale), 3 epochs only, and the
 5x-augmentation win could plausibly not hold at PFold's full training scale
 (150K structures, 250 epochs) where the baseline would also see much more
 data in absolute terms.
+
+## Volume-accounting run (2026-07-21): baseline at matched total training instances
+
+The `sequences_per_file=1` disambiguation above matched *epoch count* and
+*structures*, but under-trained the baseline in absolute terms: boltz-5 saw
+8200 seqs/epoch × 3 epochs = 24,600 total training instances, while the
+`sequences_per_file=1` cut only gave baseline 1640 × 3 = 4,920 — a 5x
+smaller total training budget, not a matched one. This run closes that gap
+directly: baseline trained for 15 epochs on its native 1640 seqs/epoch
+(1640 × 15 = 24,600 — the *same* total instance count as boltz-5's 3-epoch
+run), just repeating each of its 1640 single sequences 15 times instead of
+seeing 5 distinct MSA homologs 3 times each.
+
+| | boltz (5 seqs/file × 3 epochs) | baseline (1 seq/file × 15 epochs) |
+|---|---|---|
+| total train instances | 24,600 | 24,600 |
+| distinct sequences/structure | 5 | 1 |
+| final train_loss | 2.7241 | 2.7178 |
+| final val_loss | 2.6933 | 2.6956 |
+| final val_accuracy | 0.1981 | 0.1891 |
+
+**val_accuracy_delta = +0.0090, val_loss_delta = −0.0024** — the delta
+shrinks by ~87% from the naive +0.0690 to +0.0090 once total training
+volume is matched, and val_loss is now a coin-flip either way. The
+baseline's own epoch-by-epoch curve (epochs 1–15: val_accuracy 0.098 →
+0.191, plateauing from epoch ~8 onward in the 0.185–0.191 band) shows it
+converging to nearly the same place as boltz-5 reached in fewer, more
+varied epochs — repetition of one sequence gets most of the way there,
+just needs more passes to do it.
+
+**Updated combined conclusion:** across all three cuts (naive, curation-
+only/steps-matched-per-epoch, and volume-matched/total-instances-matched),
+the picture is consistent: Boltz's specific `.npz` extraction and curation
+contributes ~nothing beyond a plain RCSB fetch (the curation-only cut,
+−0.004). What sampling 5 MSA homologs per structure buys is mostly
+**more total gradient steps early**, reaching the baseline's eventual
+plateau faster (3 epochs vs. ~8) rather than reaching meaningfully higher —
+the residual +0.009 at matched total volume is small enough that a
+single-seed pilot can't distinguish it from noise. If speed-of-convergence
+(reaching a given accuracy in fewer wall-clock epochs) matters for the
+downstream use case, MSA augmentation is a legitimate, real lever; if only
+the eventual ceiling matters, this pilot found no evidence it raises it.
