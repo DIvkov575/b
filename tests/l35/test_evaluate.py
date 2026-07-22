@@ -299,3 +299,88 @@ def test_run_eval_default_sampler_fn_is_unchanged(monkeypatch):
     )
 
     assert len(calls) == 1, "run_eval's default sampler_fn must resolve few_step_sample at call time"
+
+
+def test_run_multi_seed_sweep_runs_run_eval_once_per_seed():
+    # A single-seed run_eval call is a single point estimate; the multi-
+    # seed sweep must call run_eval independently for EACH seed (fresh
+    # generator per seed) and return per-config lists of per-seed metrics,
+    # not just the last seed's result.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    from src.l35.evaluate import run_multi_seed_sweep
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    teacher = ConstantDecoder()
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+    results = _load_n_real_rows(n=2)
+
+    sweep = run_multi_seed_sweep(
+        [("teacher@8", teacher, 8)], results, beta_scheduler, sigma_scheduler,
+        max_timestep=1000, device=torch.device("cpu"), seeds=[0, 1, 2],
+    )
+
+    assert set(sweep.keys()) == {"teacher@8"}
+    assert len(sweep["teacher@8"]["match_rate"]) == 3, "one match_rate value per seed"
+
+
+def test_run_multi_seed_sweep_each_seed_gets_independent_starting_noise():
+    # Regression guard for the most likely way to get this wrong: reusing
+    # ONE generator across seeds (e.g. re-seeding it in a loop without a
+    # fresh torch.Generator each time) could silently correlate "different
+    # seeds" if downstream state leaks -- confirm two different seeds in
+    # the sweep produce DIFFERENT raw sampled tensors for the same
+    # structure/config (a real, non-degenerate decoder is needed for this;
+    # ConstantDecoder always produces the same output regardless of noise
+    # only for pred_l/pred_x, but the INITIAL noise draw itself still
+    # differs and propagates through the deterministic DDIM/PF-ODE steps).
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    import src.l35.evaluate as evaluate_module
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    teacher = ConstantDecoder()
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+    results = _load_n_real_rows(n=1)
+
+    captured = []
+    real_few_step_sample = evaluate_module.few_step_sample
+
+    def _spy(*args, **kwargs):
+        fc, lattices = real_few_step_sample(*args, **kwargs)
+        captured.append(fc.clone())
+        return fc, lattices
+
+    import pytest as _pytest
+    monkeypatch = _pytest.MonkeyPatch()
+    monkeypatch.setattr(evaluate_module, "few_step_sample", _spy)
+    try:
+        evaluate_module.run_multi_seed_sweep(
+            [("teacher@8", teacher, 8)], results, beta_scheduler, sigma_scheduler,
+            max_timestep=1000, device=torch.device("cpu"), seeds=[0, 1],
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert len(captured) == 2
+    assert not torch.equal(captured[0], captured[1]), "different seeds must draw different initial noise"

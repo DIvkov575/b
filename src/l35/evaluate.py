@@ -26,7 +26,7 @@ import torch  # noqa: E402
 from eval_utils import lattices_to_params_shape  # noqa: E402
 
 import src.l35.smact_validity_none_oxidation_states_shim  # noqa: E402  (must follow eval_utils import, patches its smact_validity)
-from src.l35.sample import few_step_sample  # noqa: E402
+from src.l35.sample import few_step_sample, multistep_consistency_sample  # noqa: E402
 from src.l35.train_distill import (  # noqa: E402
     load_teacher_and_schedulers,
     load_teacher_module,
@@ -174,6 +174,42 @@ def run_eval(
     return all_metrics
 
 
+def run_multi_seed_sweep(
+    sampler_configs, results, beta_scheduler, sigma_scheduler, max_timestep, device, seeds,
+    sampler_fn=None,
+):
+    """Runs run_eval independently once per seed in seeds (a fresh
+    torch.Generator per seed, not one generator re-seeded in a loop -- the
+    two are equivalent for this codebase's generator.manual_seed usage, but
+    a fresh Generator per seed keeps this function's own correctness
+    independent of run_eval's internal reseeding details), and returns per-
+    config lists of per-seed metric values so a single point estimate is
+    never treated as exact. Feed the result to eval_stats.aggregate_across_
+    seeds / paired_sign_test for real confidence intervals and significance
+    tests -- this function only collects raw per-seed results.
+
+    Returns {config_name: {metric_name: [value_per_seed, ...]}}.
+    """
+    per_seed_results = []
+    for seed in seeds:
+        generator = torch.Generator(device=device).manual_seed(seed)
+        per_seed_results.append(
+            run_eval(
+                sampler_configs, results, beta_scheduler, sigma_scheduler, max_timestep, device,
+                generator=generator, sampler_fn=sampler_fn,
+            )
+        )
+
+    sweep = {}
+    for name, _, _ in sampler_configs:
+        metric_names = per_seed_results[0][name].keys()
+        sweep[name] = {
+            metric_name: [seed_result[name][metric_name] for seed_result in per_seed_results]
+            for metric_name in metric_names
+        }
+    return sweep
+
+
 def run_real_sampler_eval(model, results, device, seed=0):
     """Same three-way-comparison purpose as run_eval, but through DiffCSP's
     OWN real sample() (diffusion.py's stochastic annealed-Langevin
@@ -277,13 +313,28 @@ def main():
         "since it directly answers whether the homebrew deterministic sampler's own "
         "teacher@1000 number matches DiffCSP's real, published sampler.",
     )
+    parser.add_argument(
+        "--num_seeds", type=int, default=1,
+        help="if >1, run the SAME sweep independently across this many seeds "
+        "(seed, seed+1, ..., seed+num_seeds-1) and report mean/CI/paired "
+        "significance (eval_stats.py) instead of a single point estimate. A "
+        "single n=200/one-seed match_rate is not trustworthy on its own -- see "
+        "run_multi_seed_sweep's docstring.",
+    )
+    parser.add_argument(
+        "--consistency_sampler", action="store_true",
+        help="sample the student via multistep_consistency_sample (genuine "
+        "consistency sampling, Algorithm 1) instead of few_step_sample (the "
+        "respaced DDIM/PF-ODE solver). Use this for a student trained ONCE with a "
+        "shared fine training-time discretization and evaluated at multiple NFEs, "
+        "as opposed to a student trained separately per target NFE.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}")
 
     torch.manual_seed(args.seed)
-    generator = torch.Generator(device=device).manual_seed(args.seed)
 
     teacher, beta_scheduler, sigma_scheduler = load_teacher_and_schedulers(
         args.ckpt_path, args.hparams_path, device
@@ -316,13 +367,48 @@ def main():
     for n in student_num_steps_list:
         sampler_configs.append((f"teacher@{n}", teacher, n))
         sampler_configs.append((f"student@{n}", student, n))
-    all_metrics = run_eval(
-        sampler_configs, results, beta_scheduler, sigma_scheduler,
-        max_timestep=beta_scheduler.timesteps, device=device, generator=generator,
+
+    sampler_fn = multistep_consistency_sample if args.consistency_sampler else few_step_sample
+    sampler_label = "genuine consistency sampler (Algorithm 1)" if args.consistency_sampler else (
+        "homebrew respaced DDIM/PF-ODE sampler"
     )
 
-    for name, metrics in all_metrics.items():
-        print(f"{name} (homebrew DDIM/PF-ODE sampler): {metrics}")
+    if args.num_seeds <= 1:
+        generator = torch.Generator(device=device).manual_seed(args.seed)
+        all_metrics = run_eval(
+            sampler_configs, results, beta_scheduler, sigma_scheduler,
+            max_timestep=beta_scheduler.timesteps, device=device, generator=generator,
+            sampler_fn=sampler_fn,
+        )
+        for name, metrics in all_metrics.items():
+            print(f"{name} ({sampler_label}): {metrics}")
+    else:
+        from src.l35.eval_stats import aggregate_across_seeds, paired_sign_test
+
+        seeds = list(range(args.seed, args.seed + args.num_seeds))
+        sweep = run_multi_seed_sweep(
+            sampler_configs, results, beta_scheduler, sigma_scheduler,
+            max_timestep=beta_scheduler.timesteps, device=device, seeds=seeds,
+            sampler_fn=sampler_fn,
+        )
+        for name, per_metric in sweep.items():
+            agg = aggregate_across_seeds(per_metric["match_rate"])
+            print(
+                f"{name} ({sampler_label}, {len(seeds)} seeds): "
+                f"match_rate mean={agg['mean']:.4f} "
+                f"95% CI=[{agg['ci_low']:.4f}, {agg['ci_high']:.4f}]"
+            )
+        for n in student_num_steps_list:
+            teacher_key, student_key = f"teacher@{n}", f"student@{n}"
+            sig = paired_sign_test(
+                sweep[student_key]["match_rate"], sweep[teacher_key]["match_rate"]
+            )
+            print(
+                f"student@{n} vs teacher@{n} (paired sign test, {len(seeds)} seeds): "
+                f"student wins {sig['n_wins_a']}/{len(seeds)}, "
+                f"teacher wins {sig['n_wins_b']}/{len(seeds)}, "
+                f"p={sig['p_value']:.4f}"
+            )
 
     # teacher@1000 through DiffCSP's OWN real sample() (diffusion.py's
     # stochastic annealed-Langevin predictor-corrector), not the homebrew
