@@ -1,0 +1,146 @@
+{
+  "v1_vs_base": {
+    "base": {
+      "accuracy": 0.9590984974958264,
+      "f1": 0.9586497890295359,
+      "auc": 0.9896627935819576,
+      "n_train": 4792,
+      "n_test": 1198,
+      "accuracy_ci": {
+        "point_estimate": 0.9590984974958264,
+        "ci_lower": 0.9474123539232053,
+        "ci_upper": 0.9699499165275459,
+        "bootstrap_std": 0.005717137485436549
+      },
+      "f1_ci": {
+        "point_estimate": 0.9586497890295359,
+        "ci_lower": 0.946618895025845,
+        "ci_upper": 0.9697465592942002,
+        "bootstrap_std": 0.005922113474585058
+      },
+      "auc_ci": {
+        "point_estimate": 0.9896627935819576,
+        "ci_lower": 0.9850224577668383,
+        "ci_upper": 0.9936841181138197,
+        "bootstrap_std": 0.0022059900185271066
+      }
+    },
+    "finetuned": {
+      "accuracy": 0.9741235392320534,
+      "f1": 0.9740150880134115,
+      "auc": 0.9953260999829989,
+      "n_train": 4792,
+      "n_test": 1198,
+      "accuracy_ci": {
+        "point_estimate": 0.9741235392320534,
+        "ci_lower": 0.9649415692821369,
+        "ci_upper": 0.9824707846410684,
+        "bootstrap_std": 0.004560267234512028
+      },
+      "f1_ci": {
+        "point_estimate": 0.9740150880134115,
+        "ci_lower": 0.9644588045234249,
+        "ci_upper": 0.9828009828009828,
+        "bootstrap_std": 0.0046495720303814615
+      },
+      "auc_ci": {
+        "point_estimate": 0.9953260999829989,
+        "ci_lower": 0.9921228610690447,
+        "ci_upper": 0.9978664051539164,
+        "bootstrap_std": 0.0014702661877487283
+      }
+    },
+    "paired_diff": {
+      "accuracy": {
+        "point_estimate_diff": 0.015025041736226985,
+        "ci_lower": 0.005843071786310494,
+        "ci_upper": 0.024207011686143587,
+        "significant_at_95pct": true
+      },
+      "f1": {
+        "point_estimate_diff": 0.01536529898387562,
+        "ci_lower": 0.006140034217581811,
+        "ci_upper": 0.024957627988124353,
+        "significant_at_95pct": true
+      },
+      "auc": {
+        "point_estimate_diff": 0.00566330640104129,
+        "ci_lower": 0.0031828258492589885,
+        "ci_upper": 0.008381218428422085,
+        "significant_at_95pct": true
+      }
+    }
+  },
+  "v2_vs_base": {
+    "base": {
+      "accuracy": 0.9590984974958264,
+      "f1": 0.9586497890295359,
+      "auc": 0.9896627935819576,
+      "n_train": 4792,
+      "n_test": 1198,
+      "accuracy_ci": {
+        "point_estimate": 0.9590984974958264,
+        "ci_lower": 0.9474123539232053,
+        "ci_upper": 0.9699499165275459,
+        "bootstrap_std": 0.005717137485436549
+      },
+      "f1_ci": {
+        "point_estimate": 0.9586497890295359,
+        "ci_lower": 0.946618895025845,
+        "ci_upper": 0.9697465592942002,
+        "bootstrap_std": 0.005922113474585058
+      },
+      "auc_ci": {
+        "point_estimate": 0.9896627935819576,
+        "ci_lower": 0.9850224577668383,
+        "ci_upper": 0.9936841181138197,
+        "bootstrap_std": 0.0022059900185271066
+      }
+    },
+    "finetuned": {
+      "accuracy": 0.9691151919866444,
+      "f1": 0.9689857502095558,
+      "auc": 0.9949860786341176,
+      "n_train": 4792,
+      "n_test": 1198,
+      "accuracy_ci": {
+        "point_estimate": 0.9691151919866444,
+        "ci_lower": 0.9590984974958264,
+        "ci_upper": 0.9782971619365609,
+        "bootstrap_std": 0.004932725421730183
+      },
+      "f1_ci": {
+        "point_estimate": 0.9689857502095558,
+        "ci_lower": 0.9586631486367634,
+        "ci_upper": 0.9784520939581353,
+        "bootstrap_std": 0.005045737343921163
+      },
+      "auc_ci": {
+        "point_estimate": 0.9949860786341176,
+        "ci_lower": 0.9918183183531752,
+        "ci_upper": 0.9975854502436855,
+        "bootstrap_std": 0.001475028513732499
+      }
+    },
+    "paired_diff": {
+      "accuracy": {
+        "point_estimate_diff": 0.01001669449081799,
+        "ci_lower": 0.0,
+        "ci_upper": 0.02003338898163609,
+        "significant_at_95pct": false
+      },
+      "f1": {
+        "point_estimate_diff": 0.010335961180019893,
+        "ci_lower": 0.0006516762434373492,
+        "ci_upper": 0.020166034737389635,
+        "significant_at_95pct": true
+      },
+      "auc": {
+        "point_estimate_diff": 0.005323285052159954,
+        "ci_lower": 0.0030193815295764537,
+        "ci_upper": 0.007856906425576798,
+        "significant_at_95pct": true
+      }
+    }
+  }
+}

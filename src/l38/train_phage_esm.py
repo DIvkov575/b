@@ -7,12 +7,22 @@ pre-existing perplexity gap between phage and general-protein sequences --
 without needing anything beyond plain `transformers` (no openfold/ESMFold,
 no exotic installs).
 
-Run: .venv-l38/bin/python -m src.l38.train_phage_esm
+Run: .venv-l38/bin/python -m src.l38.train_phage_esm [--train-seed N] [--out-suffix STR]
+
+--train-seed controls torch's RNG (masking pattern selection, DataLoader
+shuffle order, model-side dropout if any) -- the DATA split (SEED, below)
+stays fixed across seed variants so multi-seed runs train/eval on identical
+data and isolate training-randomness variance specifically (per L39's
+refinement: resolving whether v1 vs v2's ~0.4pt gap on the virion-
+classification downstream eval is real or seed noise).
 """
+import argparse
 import json
+import random
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForMaskedLM, AutoTokenizer
@@ -21,15 +31,21 @@ from src.l38.phage_data import clean_sequences, parse_fasta, train_eval_split
 
 MODEL_NAME = "facebook/esm2_t12_35M_UR50D"
 DATA_DIR = Path(__file__).resolve().parent / "data_cache" / "phage"
-OUT_DIR = Path(__file__).resolve().parent / "phage_finetune_out"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_LENGTH = 512
 BATCH_SIZE = 16
 N_EPOCHS = 3
 LR = 2e-5
 MASK_PROB = 0.15
-SEED = 0
+SEED = 0  # data-split seed; NOT varied across multi-seed sweeps
+
+
+def set_train_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 class MLMDataset(Dataset):
@@ -130,8 +146,17 @@ def load_all_data():
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-seed", type=int, default=0, help="seeds torch/numpy/random for masking+shuffle order; data split is NOT affected")
+    parser.add_argument("--out-suffix", type=str, default="", help="appended to the output dir name, e.g. '_seed1'")
+    args = parser.parse_args()
+
+    set_train_seed(args.train_seed)
+    out_dir = Path(__file__).resolve().parent / f"phage_finetune_out{args.out_suffix}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device: {device}", flush=True)
+    print(f"device: {device}, train_seed: {args.train_seed}, out_dir: {out_dir}", flush=True)
 
     phage_train, phage_eval, general_eval = load_all_data()
     print(f"phage_train={len(phage_train)} phage_eval={len(phage_eval)} general_eval={len(general_eval)}", flush=True)
@@ -194,15 +219,15 @@ def main():
         "phage_ppl_improvement_pct": 100 * (base_phage_ppl - final_phage_ppl) / base_phage_ppl,
         "general_loss_change": base_general_loss - final_general_loss,
         "n_train": len(phage_train), "n_phage_eval": len(phage_eval), "n_general_eval": len(general_eval),
-        "n_epochs": N_EPOCHS, "model": MODEL_NAME,
+        "n_epochs": N_EPOCHS, "model": MODEL_NAME, "train_seed": args.train_seed,
     }
     print(json.dumps(results, indent=2), flush=True)
 
-    model.save_pretrained(OUT_DIR / "final_model")
-    tokenizer.save_pretrained(OUT_DIR / "final_model")
-    with open(OUT_DIR / "results.json", "w") as f:
+    model.save_pretrained(out_dir / "final_model")
+    tokenizer.save_pretrained(out_dir / "final_model")
+    with open(out_dir / "results.json", "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nSaved model + results to {OUT_DIR}", flush=True)
+    print(f"\nSaved model + results to {out_dir}", flush=True)
 
 
 if __name__ == "__main__":

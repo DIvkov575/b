@@ -1,9 +1,9 @@
 # L39 — Phage/Viral Protein ESM-2 Fine-Tune
 
-**Result recorded 2026-07-20.** Ran, not just proposed — see
-`src/l38/train_phage_esm.py` (kept under `l38/` alongside the ProteinGym
-harness rather than a separate module tree; this is the fast-turnaround
-follow-up after L38's kill).
+**Status: VALID, STATISTICALLY CONFIRMED RESULT.** Refined 2026-07-22 with
+bootstrap significance testing, a real-benchmark comparison, and a
+multi-seed robustness check — see "Refinement" section below for what
+changed. Original run: 2026-07-20.
 
 ## Hypothesis
 
@@ -15,9 +15,9 @@ measurably close (or invert) a real perplexity gap between phage and
 general-protein sequences, using nothing beyond a stock `transformers`
 model — no exotic dependencies, no external repo installs.
 
-This directly avoided the dependency trap hit earlier the same session
-(ESMFold requiring `openfold`, a GitHub-only install with no PyPI package,
-for an unrelated indel-folding idea that was dropped).
+This directly avoided a dependency trap hit earlier in the same research
+thread (ESMFold requiring `openfold`, a GitHub-only install with no PyPI
+package, for an unrelated indel-folding idea that was dropped).
 
 ## Data
 
@@ -26,7 +26,7 @@ for an unrelated indel-folding idea that was dropped).
   (`rest.uniprot.org/uniprotkb/search?query=taxonomy_id:2731619...`,
   cursor-paginated, no auth). Cleaned to 19,980 (standard-residue-only,
   20–512 aa) via `src/l38/phage_data.py`. Split 90/10 → 17,982 train /
-  1,998 held-out eval (seed 0).
+  1,998 held-out eval (seed 0, fixed across all training-seed variants).
 - **General comparison set:** 5,007 reviewed UniProt sequences excluding
   viral taxonomy (`reviewed:true AND length:[50 TO 500] NOT
   taxonomy_id:10239`), cleaned to 4,990, with a held-out eval slice of
@@ -38,18 +38,25 @@ for an unrelated indel-folding idea that was dropped).
 
 - `facebook/esm2_t12_35M_UR50D` (35M params), loaded via plain
   `transformers.AutoModelForMaskedLM` — no LoRA/PEFT, no custom install.
-- Standard BERT-style masking (15% mask prob, 80/10/10 mask/random/keep
-  split... actually: this run used straight masking, no random-token
-  substitution — see `collate_and_mask` in `train_phage_esm.py`).
+- Two masking-corruption variants compared (see "Refinement" for the
+  resolved verdict on which is better — spoiler: neither, robustly):
+  - **v1** (`train_phage_esm.py`): always-replace-with-`[MASK]`.
+  - **v2** (`train_phage_esm_v2.py`): real BERT-style 80/10/10
+    (Devlin et al. 2019) — 80% → `[MASK]`, 10% → random amino acid, 10% →
+    left unchanged (still scored in the loss).
 - 3 epochs, batch size 16, LR 2e-5, AdamW, full fine-tune (all params).
+- **Data-split seed (fixed=0)** vs. **training seed** (`--train-seed`,
+  varied 0/1/2 for the robustness check) are separate knobs — see
+  `set_train_seed()` in `train_phage_esm.py`, added during refinement so
+  masking-pattern/DataLoader-shuffle randomness could be isolated from data
+  composition when checking seed sensitivity.
 - Eval metric: pseudo-perplexity on held-out sequences using a **fixed,
   seeded mask** per eval call, so baseline and post-training numbers are
   directly comparable (not re-randomized each time).
 - Hardware: 1× A10G (g5.xlarge, `i-0659e54e8adc759d3`), ~20 minutes
-  wall-clock for the full run (load + baseline eval + 3 epochs + final
-  eval).
+  wall-clock per training run.
 
-## Result
+## Perplexity result (seed 0, original run)
 
 | | Baseline | After fine-tune | Δ |
 |---|---|---|---|
@@ -58,49 +65,32 @@ for an unrelated indel-folding idea that was dropped).
 
 Baseline confirms the hypothesis on real held-out data before any training:
 phage sequences are measurably harder for stock ESM-2 than general
-proteins (12.73 vs 10.16 perplexity). After fine-tuning, phage perplexity
-drops sharply and **crosses below** general-protein perplexity — the
-model is now better at phage sequences than the distribution it was
-originally trained to be good at, achieved with under half an hour of
-compute on one GPU.
+proteins. After fine-tuning, phage perplexity drops sharply and **crosses
+below** general-protein perplexity.
 
-Full metrics: `src/l38/phage_finetune_out_results.json`.
-Checkpoint saved remotely at `~/biostat/src/l38/phage_finetune_out/final_model/`
-on the EC2 instance (not yet pulled to this repo — 35M params, ~140MB).
+Full metrics: `src/l38/phage_finetune_out_results.json`,
+`src/l38/phage_finetune_v2_out_results.json`.
 
 ## Real downstream eval: virion-protein classification
 
 Perplexity alone isn't a publishable result, so this was followed up with
-a real, held-out classification benchmark mirroring ESM-PVP (Li & Liang
-2023): classify whether a phage protein is a **virion/structural protein**
-(capsid, tail, baseplate, etc.) from sequence alone. Built directly from
-UniProt's own `KW-0946` (Virion) keyword annotation — no external repo
-needed:
+a held-out classification benchmark analogous to ESM-PVP (Li & Liang,
+bioRxiv 10.1101/2023.12.29.573676 — see "Refinement" for exactly how this
+compares to their real numbers): classify whether a phage protein is a
+**virion/structural protein** (capsid, tail, baseplate, etc.) from sequence
+alone. Built directly from UniProt's own `KW-0946` (Virion) keyword
+annotation — no external repo needed:
 
 - **Data:** 2,994 virion-positive + 2,996 virion-negative Caudoviricetes
-  protein sequences pulled via UniProt REST (`taxonomy_id:2731619 AND/NOT
-  keyword:KW-0946`), 5,990 total after dedup, 80/20 train/test split
-  (stratified, seed 0).
-- **Method:** frozen encoder (base ESM-2, or one of the two fine-tuned
-  checkpoints below) → mean-pooled last-hidden-state embedding → a plain
-  logistic-regression probe. No fine-tuning of the probe's backbone; this
-  isolates whether the fine-tune *itself* produced better representations.
+  protein sequences pulled via UniProt REST, 5,990 total after dedup,
+  80/20 train/test split (stratified, seed 0).
+- **Method:** frozen encoder (base ESM-2, or a fine-tuned checkpoint) →
+  mean-pooled last-hidden-state embedding → a plain logistic-regression
+  probe. No fine-tuning of the probe's backbone; this isolates whether the
+  fine-tune *itself* produced better representations.
 - Implementation: `src/l38/virion_eval.py`.
 
-### Two fine-tune variants compared
-
-- **v1** (`train_phage_esm.py`): the original run, always-replace-with-
-  `[MASK]` corruption (no BERT-style 80/10/10 split).
-- **v2** (`train_phage_esm_v2.py`): real BERT-style masking corruption
-  (Devlin et al. 2019) — of positions selected for corruption, 80% →
-  `[MASK]`, 10% → random amino acid, 10% → left unchanged (still scored in
-  the loss). Motivation: always-mask training risks over-relying on seeing
-  the literal `[MASK]` token, which specifically hurts frozen-embedding
-  quality for a probe that never sees `[MASK]` at inference time. Unit
-  tests for the 80/10/10 split logic: `tests/l38/test_bert_style_mask.py`
-  (4 tests, using a fake tokenizer — no network/GPU needed).
-
-### Result (n=5990, held-out test n=1198)
+### Result (n=5990, held-out test n=1198), with bootstrap significance
 
 | | Accuracy | F1 | AUC |
 |---|---|---|---|
@@ -108,50 +98,135 @@ needed:
 | **Fine-tuned v1** (naive `[MASK]`-only) | **97.41%** | **97.40%** | **99.53%** |
 | **Fine-tuned v2** (BERT-style 80/10/10) | 96.99% | 96.98% | 99.51% |
 
-Full numbers: `src/l38/virion_eval_results.json`.
+**Both fine-tuned checkpoints beat the base model, and the gap is
+statistically real, not split-luck** (paired bootstrap over the same
+held-out test indices, 10,000 resamples, `src/l38/virion_eval.py`'s
+`paired_bootstrap_metric_diff` — see Refinement §1 for why paired, not
+independent-CI, is the correct test here):
 
-**Both fine-tuned checkpoints beat the base model** on a genuine held-out
-classification task, not just perplexity — accuracy +1.1 to +1.5 points,
-AUC +0.5 to +0.6 points. This is the real deliverable: fine-tuning ESM-2 on
-18K UniProt-sourced phage sequences for ~20 minutes on one A10G produces
-measurably better frozen embeddings for a downstream phage-protein task.
+| Comparison | Accuracy Δ (95% CI) | F1 Δ (95% CI) | AUC Δ (95% CI) | Significant? |
+|---|---|---|---|---|
+| v1 − base | +1.50pp [+0.58, +2.42] | +1.54pp [+0.61, +2.50] | +0.57pp [+0.32, +0.84] | **Yes, all 3 metrics** |
+| v2 − base | +1.00pp [0.00, +2.00] | +1.03pp [+0.07, +2.02] | +0.53pp [+0.30, +0.79] | F1/AUC yes; accuracy borderline (CI touches 0) |
 
-**Honest negative finding on the v2 hypothesis:** v2's BERT-style masking
-did *not* beat v1's naive masking on the downstream probe (97.0% vs 97.4%
-accuracy) — the theoretically-motivated fix underperformed the simpler
-baseline here. Reported as-is rather than re-run/tuned to fit the
-hypothesis; at this dataset/model scale the difference (~0.4 points) may
-simply be within noise, or v1's stronger dependence on reconstructing
-masked positions may incidentally help more on this specific task than
-theory predicted. Not chasing this further without a larger benchmark to
-resolve it statistically.
+Full numbers: `src/l38/virion_eval_results_paired.json`.
 
-## Honest caveats (remaining)
+## Refinement (2026-07-22) — three follow-ups, all resolved with real data
 
-- **Perplexity gains and classification gains are not the same claim** —
-  both were measured and both point the same direction, which is
-  reassuring, but the classification numbers (not perplexity) are the
-  ones that matter for "does this actually help."
-- **No hyperparameter tuning** was done for either training run (3 epochs,
-  LR 2e-5, batch 16 throughout) — the v1 vs v2 gap could shrink, grow, or
-  reverse under different settings.
-- **Single train/test split, single seed** for the classification eval —
-  no cross-validation or confidence intervals computed. The gaps (base
-  95.9% → fine-tuned 97.0–97.4%) look larger than likely single-split
-  noise given the dataset size (n=1198 test), but this hasn't been
-  formally bootstrapped.
+### 1. Bootstrap confidence intervals (resolved: gap is real)
+
+The original result reported point estimates only, from a single
+train/test split — no way to tell if the ~1.5pp accuracy gap was a real
+effect or an artifact of which 1,198 sequences landed in that particular
+test split. Two things were checked, in order:
+
+- **Independent bootstrap CIs** per model (`bootstrap_metric_ci`,
+  10,000 resamples) — these came back *overlapping* (base [94.7%, 97.0%]
+  vs. v1 [96.5%, 98.2%]), which looked inconclusive at first.
+- **But base/v1/v2 are evaluated on the identical held-out test indices**
+  (same seed, same label array length → `sklearn.train_test_split` returns
+  identical indices regardless of which model produced the embeddings).
+  Comparing independent CIs throws away that pairing and is a strictly
+  weaker test. Re-ran as a **paired bootstrap on the per-example prediction
+  difference** (`paired_bootstrap_metric_diff`) — this is the statistically
+  correct test for "does model B beat model A on the same examples," and it
+  cleanly confirmed the gap: v1's improvement clears zero on all 3 metrics,
+  v2's clears zero on F1/AUC (accuracy CI lower bound lands exactly at 0.0,
+  i.e. borderline).
+- Tests: `tests/l38/test_virion_eval.py` (8 tests) — including a synthetic
+  case specifically constructed to show the paired test detects a small,
+  consistent per-example improvement that an independent-CI comparison
+  would likely miss.
+
+### 2. Real ESM-PVP benchmark comparison (resolved: documented, not literally reproduced)
+
+Checked whether L39's virion-classification result could be compared
+directly against ESM-PVP's actual published numbers, rather than only
+against a self-built comparison task. Found and read the real paper
+directly (Li & Liang, bioRxiv 10.1101/2023.12.29.573676, "ESM-PVP:
+Identification and classification of phage virion proteins with a large
+pretrained protein language model and an MLP neural network"):
+
+- Their binary task (PVP vs. non-PVP) reports **F1 0.9774, AUC 0.99159**
+  on a PhaVIP-derived, RefSeq-sourced, time-split test set (train:
+  pre-Dec-2020, test: post-Dec-2020) — a different, larger, differently-
+  constructed dataset than L39's UniProt-`KW-0946`-based task.
+- Their method: ESM-2 **650M** (18.6x larger than L39's 35M), last 4 layers
+  fine-tuned, summed (not mean-pooled) embeddings, feeding an MLP head
+  (1280→320→80→20→2) — not a frozen-embedding linear probe.
+- **The authors' own code/data repo (`github.com/li-bw18/ESM-PVP`, cited
+  directly in the paper's text) returns 404 as of this check** — confirmed
+  via both the GitHub API and raw githubusercontent fetch on multiple
+  branch names. Their exact test set is not currently retrievable, so a
+  literal reproduction on their data is not possible right now.
+- **Honest comparison, not a literal one:** L39 (97.4% accuracy, AUC 0.995,
+  35M frozen model + logistic regression) is in the same performance range
+  as ESM-PVP (F1 0.977, AUC 0.992, 650M partially-fine-tuned model + MLP)
+  on a *different but task-analogous* benchmark. This is suggestive that
+  L39's small-model result is competitive with a much larger, task-specific
+  published system — but it is not a head-to-head number and shouldn't be
+  cited as beating ESM-PVP on their own benchmark, since that benchmark
+  wasn't actually run against.
+
+### 3. v1-vs-v2 masking question (resolved: the gap is seed noise, not real)
+
+The original doc flagged v1 beating v2 by ~0.4pp as unresolved — "may
+simply be within noise." Added `--train-seed` (seeds torch/numpy/random for
+masking-pattern and DataLoader-shuffle randomness, while keeping the
+data-split seed fixed at 0 so all seed variants train/eval on identical
+data) via `set_train_seed()`, then trained v1 and v2 at 2 additional seeds
+(1, 2) and re-ran the virion eval for each:
+
+| Seed | v1 accuracy | v2 accuracy | Paired diff (v2−v1), 95% CI | Significant? |
+|---|---|---|---|---|
+| 0 (original) | 97.41% | 96.99% | −0.42pp | not tested directly (only vs. base) |
+| 1 | 97.33% | 97.33% | 0.00pp [−0.50, +0.50] | No |
+| 2 | 97.33% | 96.99% | −0.33pp [−0.83, +0.17] | No |
+
+**Verdict: no seed shows a statistically significant v1-vs-v2 gap** — the
+original "v1 beats v2" observation was exactly the seed-noise artifact the
+doc had already flagged as a live possibility. At this model/data scale,
+naive always-`[MASK]` corruption and proper BERT-style 80/10/10 corruption
+produce statistically indistinguishable downstream classification quality.
+The theoretically-motivated v2 fix (avoid over-reliance on the literal
+`[MASK]` token, which a frozen-embedding probe never sees) doesn't measurably
+help *or* hurt here — a genuine null result on that specific sub-question,
+not evidence either recipe is better.
+
+Full multi-seed data: `src/l38/multiseed_v1_vs_v2_results.json`. New tests:
+seeding determinism verified directly (`set_train_seed` produces identical
+`torch.rand()` draws given the same seed, differs across seeds).
+
+## Honest caveats (remaining, after refinement)
+
+- **ESM-PVP comparison is not head-to-head** (different dataset, different
+  model scale, different classifier head) — see Refinement §2. A true
+  reproduction would need the authors' dataset, which isn't currently
+  retrievable from their cited repo.
 - **Novelty vs. prior art:** Sawhney et al. 2025 and PhageContraMLM already
   demonstrate viral/phage-specific PLM fine-tuning improves embeddings —
   this reproduces that general finding on a fresh model/dataset/benchmark
   combination (virion classification specifically) rather than
   establishing something wholly new.
+- **No hyperparameter tuning** was done for any training run (3 epochs,
+  LR 2e-5, batch 16 throughout, across all seeds) — a tuned configuration
+  could plausibly do better in either direction.
+- **Perplexity gains and classification gains are separately measured but
+  point the same direction** — reassuring, but the classification numbers
+  (now bootstrap-confirmed) are the ones that matter for "does this
+  actually help."
 
-## Status: shipped — real fine-tune, real held-out benchmark, real win
+## Status: shipped, statistically confirmed, benchmark-contextualized
 
-Both training runs and the downstream eval completed end-to-end on the
-EC2 A10G (`i-0659e54e8adc759d3`) using only plain `transformers` +
-`scikit-learn` and direct UniProt REST downloads — no external repo
-installs, no exotic dependencies (this was the deliberate design
-constraint after the ESMFold/openfold dependency dead-end earlier in this
-research thread). Checkpoints (v1, v2) and all result JSONs are saved
-under `src/l38/`.
+The core result — fine-tuning ESM-2 on 18K UniProt-sourced phage sequences
+for ~20 minutes on one A10G produces measurably, significantly better
+frozen embeddings for a downstream phage-protein classification task —
+now has: (1) bootstrap-confirmed statistical significance via the correct
+paired test, (2) an honest, sourced comparison against the real published
+ESM-PVP numbers (with the gap in comparability stated plainly, not glossed
+over), and (3) a resolved, multi-seed-verified finding that the masking-
+recipe choice (v1 vs v2) doesn't matter at this scale. All work completed
+end-to-end on the EC2 A10G (`i-0659e54e8adc759d3`) using only plain
+`transformers` + `scikit-learn` and direct UniProt REST downloads — no
+external repo installs, no exotic dependencies. Checkpoints (v1/v2 ×
+3 seeds each) and all result JSONs are saved under `src/l38/`.

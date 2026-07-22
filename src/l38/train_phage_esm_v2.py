@@ -11,6 +11,7 @@ corruption recipe (Devlin et al. 2019): of the positions selected for
 representations for UNMASKED, possibly-corrupted tokens too, closer to what
 it sees at real inference/probing time.
 """
+import argparse
 import json
 import time
 from pathlib import Path
@@ -20,10 +21,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from src.l38.phage_data import clean_sequences, parse_fasta, train_eval_split
-from src.l38.train_phage_esm import MODEL_NAME, compute_pseudo_perplexity, load_all_data
-
-OUT_DIR = Path(__file__).resolve().parent / "phage_finetune_v2_out"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+from src.l38.train_phage_esm import MODEL_NAME, compute_pseudo_perplexity, load_all_data, set_train_seed
 
 MAX_LENGTH = 512
 BATCH_SIZE = 16
@@ -100,8 +98,17 @@ def collate_and_mask(batch, tokenizer, mask_prob=MASK_PROB):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-seed", type=int, default=0, help="seeds torch/numpy/random for masking+shuffle order; data split is NOT affected")
+    parser.add_argument("--out-suffix", type=str, default="", help="appended to the output dir name, e.g. '_seed1'")
+    args = parser.parse_args()
+
+    set_train_seed(args.train_seed)
+    out_dir = Path(__file__).resolve().parent / f"phage_finetune_v2_out{args.out_suffix}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device: {device}", flush=True)
+    print(f"device: {device}, train_seed: {args.train_seed}, out_dir: {out_dir}", flush=True)
 
     phage_train, phage_eval, general_eval = load_all_data()
     print(f"phage_train={len(phage_train)} phage_eval={len(phage_eval)} general_eval={len(general_eval)}", flush=True)
@@ -163,15 +170,15 @@ def main():
         "phage_loss_improvement": base_phage_loss - final_phage_loss,
         "phage_ppl_improvement_pct": 100 * (base_phage_ppl - final_phage_ppl) / base_phage_ppl,
         "n_train": len(phage_train), "n_phage_eval": len(phage_eval), "n_general_eval": len(general_eval),
-        "n_epochs": N_EPOCHS, "model": MODEL_NAME,
+        "n_epochs": N_EPOCHS, "model": MODEL_NAME, "train_seed": args.train_seed,
     }
     print(json.dumps(results, indent=2), flush=True)
 
-    model.save_pretrained(OUT_DIR / "final_model")
-    tokenizer.save_pretrained(OUT_DIR / "final_model")
-    with open(OUT_DIR / "results.json", "w") as f:
+    model.save_pretrained(out_dir / "final_model")
+    tokenizer.save_pretrained(out_dir / "final_model")
+    with open(out_dir / "results.json", "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nSaved v2 model + results to {OUT_DIR}", flush=True)
+    print(f"\nSaved v2 model + results to {out_dir}", flush=True)
 
 
 if __name__ == "__main__":
