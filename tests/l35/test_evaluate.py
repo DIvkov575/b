@@ -107,17 +107,20 @@ def test_run_eval_sampled_output_for_a_config_is_unaffected_by_other_configs_in_
     # Regression test for a real bug: run_eval fed every sampler_config from
     # a SINGLE, sequentially-advancing generator, so a given (name, network,
     # num_steps) config's actual sampled noise silently depended on what
-    # OTHER configs were present earlier in the list for the same ground-
-    # truth structure. Confirmed on a real EC2 NFE sweep: the exact same
-    # checkpoint, structures, and seed reported match_rate=0.18 for
-    # "teacher@8" run alone, but match_rate=0.38 for "teacher@8" run as part
-    # of a [teacher@4, student@4, teacher@8, student@8, ...] sweep -- purely
-    # from generator-state drift, not a real quality difference. Asserts on
-    # the raw sampled (frac_coords, lattices) tensors directly rather than
-    # downstream match_rate, since an untrained/degenerate network can floor
-    # match_rate at 0 in both cases and mask the bug (as an earlier version
-    # of this test did). Every config must see the SAME starting noise per
-    # ground-truth structure, regardless of sweep composition or order.
+    # OTHER configs were present earlier in the list. Confirmed on a real
+    # EC2 NFE sweep: the exact same checkpoint, structures, and seed
+    # reported match_rate=0.18 for "teacher@8" run alone, but match_rate=
+    # 0.38 for "teacher@8" run as part of a [teacher@4, student@4,
+    # teacher@8, student@8, ...] sweep -- purely from generator-state
+    # drift, not a real quality difference. Asserts on the raw sampled
+    # (frac_coords, lattices) tensors directly rather than downstream
+    # match_rate, since an untrained/degenerate network can floor
+    # match_rate at 0 in both cases and mask the bug (as an earlier
+    # version of this test did). A config's batched output (covering every
+    # structure in results in ONE call, per run_eval's own batching --
+    # see test_run_eval_batches_the_sampler_call_across_structures_not_
+    # once_per_structure) must be identical regardless of sweep
+    # composition or order.
     import src.l35.torch_scatter_compat_shim  # noqa: F401
     import torch
     import torch.nn as nn
@@ -170,10 +173,66 @@ def test_run_eval_sampled_output_for_a_config_is_unaffected_by_other_configs_in_
         max_timestep=1000, device=torch.device("cpu"), generator=torch.Generator().manual_seed(0),
     )
 
-    assert len(captured["alone"]) == len(captured["with_others"]) == 3
-    for (fc_a, l_a), (fc_b, l_b) in zip(captured["alone"], captured["with_others"]):
-        assert torch.equal(fc_a, fc_b)
-        assert torch.equal(l_a, l_b)
+    # ONE batched call per config now (not one per structure) -- both
+    # sweeps capture a single (fc, lattices) pair covering all 3
+    # structures at once.
+    assert len(captured["alone"]) == len(captured["with_others"]) == 1
+    fc_alone, l_alone = captured["alone"][0]
+    fc_with_others, l_with_others = captured["with_others"][0]
+    assert torch.equal(fc_alone, fc_with_others)
+    assert torch.equal(l_alone, l_with_others)
+
+
+def test_run_eval_batches_the_sampler_call_across_structures_not_once_per_structure():
+    # Regression test for a real bug that ran an 8.5+ hour, effectively
+    # stalled EC2 GPU eval job (0% GPU utilization, batch-size-1 dispatch
+    # overhead dominating): run_eval called sampler_fn ONCE PER STRUCTURE
+    # (batch_size=1 every call), even though few_step_sample/
+    # multistep_consistency_sample already support real multi-graph
+    # batching via num_atoms/node2graph (the same convention
+    # training_step.py's real training batches already use) -- so a
+    # 200-structure sweep did 200 separate calls instead of 1 batched call
+    # per config. This test locks in the FIX: exactly one sampler_fn call
+    # per config, regardless of how many structures are in results.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    import src.l35.evaluate as evaluate_module
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    network = ConstantDecoder()
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+    results = _load_n_real_rows(n=4)
+
+    real_few_step_sample = evaluate_module.few_step_sample
+    calls = []
+
+    def _spy(network, atom_types, num_atoms, node2graph, num_steps, *args, **kwargs):
+        calls.append(num_atoms.shape[0])
+        return real_few_step_sample(network, atom_types, num_atoms, node2graph, num_steps, *args, **kwargs)
+
+    import pytest as _pytest
+    monkeypatch = _pytest.MonkeyPatch()
+    monkeypatch.setattr(evaluate_module, "few_step_sample", _spy)
+    try:
+        evaluate_module.run_eval(
+            [("x@8", network, 8)], results, beta_scheduler, sigma_scheduler,
+            max_timestep=1000, device=torch.device("cpu"), generator=torch.Generator().manual_seed(0),
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert len(calls) == 1, f"expected 1 batched sampler call for the whole config, got {len(calls)}"
+    assert calls[0] == 4, "the single call's batch_size must cover all 4 structures at once"
 
 
 def test_run_eval_compares_multiple_sampler_configs_against_same_ground_truth():

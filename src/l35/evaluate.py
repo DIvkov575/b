@@ -122,20 +122,26 @@ def run_eval(
     by the distillation training specifically (student@8 is worse than
     teacher@8).
 
-    Every config sees the SAME starting noise for a given structure,
-    regardless of sweep order or composition: sampler_fn's only randomness
-    is its initial (l_t, x_t) draw (neither few_step_sample's deterministic
-    DDIM/PF-ODE loop nor multistep_consistency_sample's renoise-then-jump
-    loop draws INDEPENDENT extra randomness once l_t/x_t are fixed -- the
-    renoise steps in multistep_consistency_sample are themselves seeded from
-    the same generator), so the generator is reseeded from
-    (generator.initial_seed(), structure_index) before each config's call.
-    A version that instead let one generator advance sequentially across
-    every (structure, config) pair was caught giving a DIFFERENT match_rate
+    All structures in results are sampled in ONE BATCHED call per config
+    (via the same num_atoms/node2graph multi-graph convention real training
+    batches already use, not a per-structure Python loop): a prior version
+    called sampler_fn once per (structure, config) pair, which meant a
+    200-structure/9-config/5-seed sweep issued ~9,000 individual batch-
+    size-1 decoder-forward-pass sequences -- confirmed on a real EC2 run to
+    stall for 8.5+ hours at ~0% GPU utilization (dispatch overhead
+    dominating at that batch size), not a numerically necessary cost.
+
+    Every config sees the SAME starting noise for the same structure set,
+    regardless of sweep order or composition: the generator is reseeded to
+    generator.initial_seed() immediately before each config's one batched
+    call, so config A and config B -- drawing noise in the same tensor-
+    construction order over the same-shaped batch -- get identical
+    starting noise. A version that instead let one generator advance
+    sequentially across configs was caught giving a DIFFERENT match_rate
     for the identical checkpoint/structures/seed depending on which other
     configs were swept alongside it (0.18 alone vs. 0.38 as part of a
-    [4,8,16]-step sweep) -- pure generator-state drift, not a real
-    quality difference.
+    [4,8,16]-step sweep) -- pure generator-state drift, not a real quality
+    difference.
 
     Returns a dict {name: {"match_rate":..., "rms_dist":..., **validity_rates}}.
     """
@@ -160,25 +166,26 @@ def run_eval(
 
     base_seed = generator.initial_seed() if generator is not None else None
 
-    gt_dicts = []
-    sampled_dicts = {name: [] for name, _, _, _ in normalized_configs}
+    gt_dicts = [ground_truth_crystal_dict(result) for result in results]
 
-    for i, result in enumerate(results):
-        gt_dict = ground_truth_crystal_dict(result)
-        gt_dicts.append(gt_dict)
+    # ONE batched (atom_types, num_atoms, node2graph) covering every
+    # structure in results, matching train_distill.py's
+    # build_batch_from_preprocess_results convention: node2graph assigns
+    # each structure's atoms to their own graph index (0, 0, ..., 1, 1, ...),
+    # not the all-zeros single-graph convention a batch_size=1 call used.
+    num_atoms = torch.tensor([len(d["atom_types"]) for d in gt_dicts], device=device)
+    atom_types = torch.cat([torch.LongTensor(d["atom_types"]) for d in gt_dicts]).to(device)
+    node2graph = torch.repeat_interleave(torch.arange(len(gt_dicts), device=device), num_atoms)
 
-        atom_types = torch.LongTensor(gt_dict["atom_types"]).to(device)
-        num_atoms = torch.tensor([len(gt_dict["atom_types"])], device=device)
-        node2graph = torch.zeros(len(gt_dict["atom_types"]), dtype=torch.long, device=device)
-
-        for name, network, num_steps, config_sampler_fn in normalized_configs:
-            if generator is not None:
-                generator.manual_seed(base_seed + i)
-            fc, lattices = config_sampler_fn(
-                network, atom_types, num_atoms, node2graph, num_steps,
-                beta_scheduler, sigma_scheduler, max_timestep, generator=generator,
-            )
-            sampled_dicts[name].extend(split_sample_into_crystal_dicts(fc, lattices, atom_types, num_atoms))
+    sampled_dicts = {}
+    for name, network, num_steps, config_sampler_fn in normalized_configs:
+        if generator is not None:
+            generator.manual_seed(base_seed)
+        fc, lattices = config_sampler_fn(
+            network, atom_types, num_atoms, node2graph, num_steps,
+            beta_scheduler, sigma_scheduler, max_timestep, generator=generator,
+        )
+        sampled_dicts[name] = split_sample_into_crystal_dicts(fc, lattices, atom_types, num_atoms)
 
     gt_crys = [Crystal(d) for d in gt_dicts]
 
