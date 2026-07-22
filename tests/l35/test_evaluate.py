@@ -216,3 +216,86 @@ def test_run_eval_compares_multiple_sampler_configs_against_same_ground_truth():
     assert set(all_metrics.keys()) == {"teacher@50", "teacher@8", "student@8"}
     for metrics in all_metrics.values():
         assert set(metrics.keys()) >= {"match_rate", "rms_dist", "constructed", "comp_valid", "struct_valid", "valid"}
+
+
+def test_run_eval_accepts_a_different_sampler_fn():
+    # run_eval must not hardcode few_step_sample -- a single trained
+    # consistency-distilled student should be evaluatable at multiple NFEs
+    # via multistep_consistency_sample (the genuine consistency sampler,
+    # src/l35/sample.py) using the SAME run_eval scaffolding (same
+    # per-structure reseeding guarantee, same metric shape), not a
+    # parallel/duplicated eval loop.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    from src.l35.evaluate import run_eval
+    from src.l35.sample import multistep_consistency_sample
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    student = ConstantDecoder()
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+
+    results = _load_n_real_rows(n=2)
+    sampler_configs = [("student@4", student, 4), ("student@8", student, 8)]
+
+    all_metrics = run_eval(
+        sampler_configs, results, beta_scheduler, sigma_scheduler,
+        max_timestep=1000, device=torch.device("cpu"), generator=torch.Generator().manual_seed(0),
+        sampler_fn=multistep_consistency_sample,
+    )
+
+    assert set(all_metrics.keys()) == {"student@4", "student@8"}
+    for metrics in all_metrics.values():
+        assert set(metrics.keys()) >= {"match_rate", "rms_dist", "constructed", "comp_valid", "struct_valid", "valid"}
+
+
+def test_run_eval_default_sampler_fn_is_unchanged(monkeypatch):
+    # Regression guard: adding the sampler_fn parameter must not change
+    # run_eval's DEFAULT behavior for any existing caller that doesn't pass
+    # it -- it must still resolve to (module-level, monkeypatch-able)
+    # few_step_sample, not a def-time-bound reference to it (which would
+    # silently break the monkeypatch-based generator-leakage regression
+    # test above: monkeypatch.setattr(evaluate_module, "few_step_sample",
+    # ...) only takes effect if run_eval looks the name up at call time).
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    import src.l35.evaluate as evaluate_module
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    calls = []
+    real_few_step_sample = evaluate_module.few_step_sample
+
+    def _spy(*args, **kwargs):
+        calls.append(1)
+        return real_few_step_sample(*args, **kwargs)
+
+    monkeypatch.setattr(evaluate_module, "few_step_sample", _spy)
+
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+    results = _load_n_real_rows(n=1)
+
+    evaluate_module.run_eval(
+        [("student@8", ConstantDecoder(), 8)], results, beta_scheduler, sigma_scheduler,
+        max_timestep=1000, device=torch.device("cpu"), generator=torch.Generator().manual_seed(0),
+    )
+
+    assert len(calls) == 1, "run_eval's default sampler_fn must resolve few_step_sample at call time"

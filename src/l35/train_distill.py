@@ -273,7 +273,18 @@ def main():
     )
     parser.add_argument("--num_structures", type=int, default=256, help="real MP-20 rows for this pilot")
     parser.add_argument("--batch_size", type=int, default=16)
-    parser.add_argument("--num_steps", type=int, default=8, help="few-step student NFE target")
+    parser.add_argument(
+        "--num_steps", type=int, default=8,
+        help="training-time discretization N: the number of adjacent-index pairs "
+        "sampled from DiffCSP's full {0..timesteps} grid per Song et al. 2023 "
+        "Algorithm 2. This is NOT an inference-time NFE target -- it is independent "
+        "of how many steps the trained student is later SAMPLED at (see "
+        "src/l35/sample.py's multistep_consistency_sample, which can run the same "
+        "trained student at any NFE via consistency_sampling_grid). Training one "
+        "separate student per target NFE, as this project originally did, defeats "
+        "the point of consistency distillation; train once with a reasonably fine N "
+        "and vary NFE only at sampling time.",
+    )
     parser.add_argument("--num_epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument(

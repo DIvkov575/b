@@ -92,11 +92,18 @@ def validity_rates(crys_list):
 
 def run_eval(
     sampler_configs, results, beta_scheduler, sigma_scheduler, max_timestep, device, generator=None,
+    sampler_fn=None,
 ):
     """For each real ground-truth structure in results, and for each
-    (name, network, num_steps) in sampler_configs: sample via few_step_sample
+    (name, network, num_steps) in sampler_configs: sample via sampler_fn
     from the real ground-truth composition, then run RecEval + validity_rates
     against ground truth.
+
+    sampler_fn defaults to few_step_sample (the deterministic respaced
+    DDIM/PF-ODE solver) but accepts any callable with the same signature --
+    in particular src.l35.sample.multistep_consistency_sample, the genuine
+    consistency sampler (Song et al. 2023 Algorithm 1) that lets a single
+    trained student be evaluated at multiple NFEs without retraining.
 
     sampler_configs lets a single eval run directly compare e.g.
     ("teacher@1000", teacher, 1000), ("teacher@8", teacher, 8), and
@@ -107,9 +114,12 @@ def run_eval(
     teacher@8).
 
     Every config sees the SAME starting noise for a given structure,
-    regardless of sweep order or composition: few_step_sample's only
-    randomness is its initial (l_t, x_t) draw (the deterministic DDIM/PF-ODE
-    step loop draws no further noise), so the generator is reseeded from
+    regardless of sweep order or composition: sampler_fn's only randomness
+    is its initial (l_t, x_t) draw (neither few_step_sample's deterministic
+    DDIM/PF-ODE loop nor multistep_consistency_sample's renoise-then-jump
+    loop draws INDEPENDENT extra randomness once l_t/x_t are fixed -- the
+    renoise steps in multistep_consistency_sample are themselves seeded from
+    the same generator), so the generator is reseeded from
     (generator.initial_seed(), structure_index) before each config's call.
     A version that instead let one generator advance sequentially across
     every (structure, config) pair was caught giving a DIFFERENT match_rate
@@ -121,6 +131,15 @@ def run_eval(
     Returns a dict {name: {"match_rate":..., "rms_dist":..., **validity_rates}}.
     """
     from compute_metrics import Crystal, RecEval
+
+    if sampler_fn is None:
+        # Resolved from this module's globals AT CALL TIME, not captured as
+        # a mutable default argument (which would bind to few_step_sample
+        # once at def-time and silently stop honoring
+        # monkeypatch.setattr(evaluate_module, "few_step_sample", ...) --
+        # exactly the kind of generator/sampler-substitution bug this
+        # module's own docstrings elsewhere warn about).
+        sampler_fn = globals()["few_step_sample"]
 
     base_seed = generator.initial_seed() if generator is not None else None
 
@@ -138,7 +157,7 @@ def run_eval(
         for name, network, num_steps in sampler_configs:
             if generator is not None:
                 generator.manual_seed(base_seed + i)
-            fc, lattices = few_step_sample(
+            fc, lattices = sampler_fn(
                 network, atom_types, num_atoms, node2graph, num_steps,
                 beta_scheduler, sigma_scheduler, max_timestep, generator=generator,
             )
