@@ -247,12 +247,13 @@ def run_real_sampler_eval(model, results, device, seed=0):
     model must be the full CSPDiffusion module (load_teacher_module), not a
     bare decoder -- sample() is a method on the module, not the decoder.
 
-    model.sample() takes no generator argument; it draws from torch's
-    global RNG directly (torch.randn_like/torch.rand in diffusion.py). To
-    give every real ground-truth structure the same reproducibility
-    guarantee run_eval's explicit generator gives the homebrew sampler,
-    torch.manual_seed(seed + i) is set immediately before each structure's
-    sample() call.
+    All structures in results are batched into ONE Batch and sampled in a
+    SINGLE model.sample() call (see module docstring's note on why: the
+    real sampler's native 1000-step loop is too expensive to run at
+    batch_size=1 per structure). model.sample() takes no generator
+    argument; it draws from torch's global RNG directly
+    (torch.randn_like/torch.rand in diffusion.py), so torch.manual_seed(seed)
+    is set once immediately before the single batched call.
 
     Returns the same {"match_rate":..., "rms_dist":..., **validity_rates}
     shape run_eval's per-config dict does, so results can be reported
@@ -261,36 +262,38 @@ def run_real_sampler_eval(model, results, device, seed=0):
     from compute_metrics import Crystal, RecEval
     from torch_geometric.data import Batch, Data
 
-    gt_dicts = []
-    sampled_dicts = []
+    gt_dicts = [ground_truth_crystal_dict(result) for result in results]
 
-    for i, result in enumerate(results):
-        gt_dict = ground_truth_crystal_dict(result)
-        gt_dicts.append(gt_dict)
-
+    # ONE Batch covering every structure in results, not one Batch.
+    # from_data_list([data]) (batch_size=1) per structure in a loop -- the
+    # real 1000-step stochastic sample() is expensive enough (confirmed on
+    # a real EC2 run: 8.5+ hours at ~0% GPU utilization, batch_size=1
+    # dispatch overhead dominating) that this batching isn't optional.
+    data_list = []
+    for result in results:
         frac_coords, atom_types, lengths, angles, edge_indices, to_jimages, num_atoms = result[
             "graph_arrays"
         ]
-        data = Data(
-            frac_coords=torch.Tensor(frac_coords),
-            atom_types=torch.LongTensor(atom_types),
-            lengths=torch.Tensor(lengths).view(1, -1),
-            angles=torch.Tensor(angles).view(1, -1),
-            num_atoms=num_atoms,
-            num_nodes=num_atoms,
-        )
-        batch = Batch.from_data_list([data]).to(device)
-
-        torch.manual_seed(seed + i)
-        out, _traj = model.sample(batch)
-
-        atom_types_t = torch.LongTensor(gt_dict["atom_types"]).to(device)
-        num_atoms_t = torch.tensor([len(gt_dict["atom_types"])], device=device)
-        sampled_dicts.extend(
-            split_sample_into_crystal_dicts(
-                out["frac_coords"], out["lattices"], atom_types_t, num_atoms_t
+        data_list.append(
+            Data(
+                frac_coords=torch.Tensor(frac_coords),
+                atom_types=torch.LongTensor(atom_types),
+                lengths=torch.Tensor(lengths).view(1, -1),
+                angles=torch.Tensor(angles).view(1, -1),
+                num_atoms=num_atoms,
+                num_nodes=num_atoms,
             )
         )
+    batch = Batch.from_data_list(data_list).to(device)
+
+    torch.manual_seed(seed)
+    out, _traj = model.sample(batch)
+
+    atom_types_t = torch.LongTensor([t for d in gt_dicts for t in d["atom_types"]]).to(device)
+    num_atoms_t = torch.tensor([len(d["atom_types"]) for d in gt_dicts], device=device)
+    sampled_dicts = split_sample_into_crystal_dicts(
+        out["frac_coords"], out["lattices"], atom_types_t, num_atoms_t
+    )
 
     gt_crys = [Crystal(d) for d in gt_dicts]
     crys = [Crystal(d) for d in sampled_dicts]

@@ -167,3 +167,41 @@ def test_run_real_sampler_eval_is_reproducible_given_the_same_seed():
     second = run_real_sampler_eval(model, results, device="cpu", seed=0)
 
     assert first["match_rate"] == second["match_rate"]
+
+
+def test_run_real_sampler_eval_calls_model_sample_once_not_once_per_structure():
+    # Regression guard for the same class of bug fixed in run_eval
+    # (test_evaluate.py's test_run_eval_batches_the_sampler_call_across_
+    # structures_not_once_per_structure): run_real_sampler_eval built a
+    # Batch.from_data_list([data]) -- batch_size=1 -- inside a per-
+    # structure Python loop, calling model.sample() (the REAL, published
+    # 1000-step stochastic sampler) once per structure. At n=200 that is
+    # 200 separate 1000-step sequences at batch size 1, the same shape of
+    # problem that stalled a real EC2 run for 8.5+ hours at ~0% GPU
+    # utilization. model.sample() already accepts a real multi-graph
+    # Batch (its own forward()/sample() code indexes batch.num_atoms/
+    # batch.batch throughout), so all structures must be batched into ONE
+    # model.sample() call.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+
+    from src.l35.evaluate import run_real_sampler_eval
+    from src.l35.train_distill import load_teacher_module
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    model = load_teacher_module(CKPT_PATH, HPARAMS_PATH, device="cpu")
+    model.beta_scheduler.timesteps = 3  # keep the real sampler loop short for a fast test
+    results = _load_n_real_rows(n=4)
+
+    calls = []
+    real_sample = model.sample
+
+    def _spy(batch, *args, **kwargs):
+        calls.append(batch.num_graphs)
+        return real_sample(batch, *args, **kwargs)
+
+    model.sample = _spy
+
+    run_real_sampler_eval(model, results, device="cpu", seed=0)
+
+    assert len(calls) == 1, f"expected 1 batched model.sample() call, got {len(calls)}"
+    assert calls[0] == 4, "the single call's batch must cover all 4 structures at once"
