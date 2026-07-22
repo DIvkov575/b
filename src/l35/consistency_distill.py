@@ -44,6 +44,69 @@ def lattice_x0_estimate(l_t, pred_eps, alphas_cumprod_t):
     return (l_t - c1 * pred_eps) / c0
 
 
+def lattice_c_skip(alphas_cumprod_t, sigma_data_l):
+    """EDM/Consistency-Models-style skip coefficient (Karras et al. 2022;
+    Song et al. 2023 Sec. 3) for the lattice track, reparameterized from
+    Karras's sigma-based c_skip(sigma) = sigma_data^2 / (sigma^2 +
+    sigma_data^2) via the VP<->VE noise-level identity sigma_eff^2 =
+    (1-ac_t)/ac_t (the same substitution DDIM's own derivation uses to
+    relate a VP schedule's ac_t to an equivalent VE noise level):
+
+      c_skip(ac_t) = sigma_data_l^2 * sqrt(ac_t) / ((1-ac_t) + sigma_data_l^2 * ac_t)
+
+    c_skip(ac_t=1) == 1 exactly (the (1-ac_t) term vanishes, leaving
+    sigma_data_l^2*1 / sigma_data_l^2*1). sigma_data_l is the empirical std
+    of real lattice matrix entries (measured directly on real MP-20
+    structures, not assumed) -- the same calibration convention EDM itself
+    uses (sigma_data = std of the training data being reconstructed).
+    """
+    shape = alphas_cumprod_t.shape
+    ac_t = alphas_cumprod_t
+    return (sigma_data_l**2 * torch.sqrt(ac_t)) / ((1.0 - ac_t) + sigma_data_l**2 * ac_t)
+
+
+def lattice_c_out(alphas_cumprod_t, sigma_data_l):
+    """EDM/Consistency-Models-style output coefficient (Karras et al. 2022;
+    Song et al. 2023 Sec. 3) for the lattice track, reparameterized from
+    Karras's c_out(sigma) = -sigma*sigma_data / sqrt(sigma^2+sigma_data^2)
+    via the same VP<->VE substitution as lattice_c_skip:
+
+      c_out(ac_t) = -sigma_data_l * sqrt(1-ac_t) / sqrt((1-ac_t) + sigma_data_l^2 * ac_t)
+
+    c_out(ac_t=1) == 0 exactly (numerator vanishes). As ac_t -> 0,
+    c_out(ac_t) -> -sigma_data_l -- a FINITE constant, unlike
+    lattice_x0_estimate's naive pred_eps coefficient sqrt(1-ac_t)/sqrt(ac_t),
+    which is unbounded as ac_t -> 0 (this IS the fix for that blow-up:
+    DiffCSP's own real ac[999]=2.4280e-06 amplifies pred_eps error by ~642x
+    under the naive formula, confirmed both analytically and empirically --
+    see docs referenced in training_step.py/sample.py -- but c_out here
+    saturates at sigma_data_l regardless of how close ac_t gets to 0).
+    """
+    ac_t = alphas_cumprod_t
+    return -sigma_data_l * torch.sqrt(1.0 - ac_t) / torch.sqrt((1.0 - ac_t) + sigma_data_l**2 * ac_t)
+
+
+def lattice_x0_estimate_bounded(l_t, pred_eps, alphas_cumprod_t, sigma_data_l):
+    """Bounded (EDM/Consistency-Models-style) consistency function for the
+    lattice track: f(l_t, ac_t) = c_skip(ac_t)*l_t + c_out(ac_t)*pred_eps.
+
+    Preserves lattice_x0_estimate's exact boundary condition at ac_t=1
+    (f(l_0, ac_t=1) == l_0 for any pred_eps, since c_skip(1)=1, c_out(1)=0)
+    while eliminating its unbounded pred_eps coefficient as ac_t -> 0.
+    Intended as a drop-in replacement for lattice_x0_estimate specifically
+    in the consistency-sampling/multistep regime, where the naive formula's
+    high-noise blow-up is load-bearing (training's own forward pass never
+    reaches ac_t this close to 0 in a way that matters for pred_eps's
+    LEARNED scale, since it always regresses against REAL ground truth, not
+    the network's own prior estimate -- but SAMPLING does walk through that
+    regime, which is where the naive formula's blow-up actually bites).
+    """
+    shape = (l_t.shape[0],) + (1,) * (l_t.dim() - 1)
+    c_skip = lattice_c_skip(alphas_cumprod_t, sigma_data_l).view(shape)
+    c_out = lattice_c_out(alphas_cumprod_t, sigma_data_l).view(shape)
+    return c_skip * l_t + c_out * pred_eps
+
+
 def lattice_ddim_step(l_t, pred_eps, alphas_cumprod_t, alphas_cumprod_next):
     """Deterministic DDIM step from ac_t to ac_next, reusing the same pred_eps
     (constant-noise-direction assumption standard to DDIM, Song et al. 2020 Eq. 12).

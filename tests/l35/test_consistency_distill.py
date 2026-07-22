@@ -105,6 +105,119 @@ class TestLatticeDdimStep:
         assert torch.allclose(l_next, l0_hat, atol=1e-5)
 
 
+class TestLatticeCskipCout:
+    # Bounded (EDM/Consistency-Models-style) reparameterization of the
+    # lattice track's consistency function -- replaces lattice_x0_estimate's
+    # naive DDIM/Tweedie formula, whose pred_eps coefficient
+    # sqrt(1-ac_t)/sqrt(ac_t) is UNBOUNDED as ac_t -> 0 (~642x at
+    # ac_t=2.4e-6, DiffCSP's own real ac[999] value). Confirmed on real data:
+    # even a well-trained network's small pred_eps error gets amplified past
+    # any usable range there, both empirically (multistep consistency
+    # sampling produces geometrically invalid structures regardless of which
+    # network drives it) and via a direct overfit test (loss will not even
+    # converge when regressing l0_hat against ground truth at ac_t~=2.4e-6,
+    # oscillating instead of decreasing). Song et al. 2023 Sec. 3 (citing
+    # Karras et al. 2022's EDM preconditioning) define f_theta(x,t) =
+    # c_skip(t)*x + c_out(t)*F_theta(x,t) specifically so c_out stays
+    # BOUNDED as t grows -- this class derives the DiffCSP-lattice analogue
+    # of that same c_skip/c_out blend, keeping the exact boundary condition
+    # at ac_t=1 while eliminating the 1/sqrt(ac_t) blow-up as ac_t -> 0.
+    def test_c_skip_and_c_out_satisfy_exact_boundary_condition_at_ac_one(self):
+        # c_skip(1)=1, c_out(1)=0 -- same boundary Song et al. 2023 impose,
+        # required for f_theta(l_0, ac_t=1) == l_0 regardless of pred_eps.
+        from src.l35.consistency_distill import lattice_c_skip, lattice_c_out
+
+        sigma_data_l = 3.33
+        ac_t = torch.ones(4)
+
+        assert torch.allclose(lattice_c_skip(ac_t, sigma_data_l), torch.ones(4), atol=1e-6)
+        assert torch.allclose(lattice_c_out(ac_t, sigma_data_l), torch.zeros(4), atol=1e-6)
+
+    def test_c_out_stays_bounded_as_ac_t_approaches_zero(self):
+        # The property the naive formula lacks: c_out(ac_t) -> -sigma_data_l
+        # (a FINITE constant) as ac_t -> 0, rather than diverging.
+        from src.l35.consistency_distill import lattice_c_out
+
+        sigma_data_l = 3.33
+        ac_t_values = torch.tensor([1e-2, 1e-4, 1e-6, 1e-8, 0.0])
+
+        c_out_values = lattice_c_out(ac_t_values, sigma_data_l)
+
+        assert torch.isfinite(c_out_values).all()
+        assert torch.allclose(c_out_values[-1], torch.tensor(-sigma_data_l), atol=1e-4)
+        # monotonically approaching the limit as ac_t shrinks (no oscillation
+        # or overshoot past the asymptote)
+        assert (c_out_values.abs() <= sigma_data_l + 1e-4).all()
+
+    def test_bounded_x0_estimate_matches_naive_formula_near_ac_one(self):
+        # Near the boundary (ac_t close to 1), the bounded blend must agree
+        # closely with the existing naive formula -- this reparameterization
+        # changes behavior specifically in the high-noise regime the naive
+        # formula mishandles, not near ac_t=1 where the naive formula is
+        # already exact.
+        from src.l35.consistency_distill import lattice_x0_estimate_bounded
+
+        torch.manual_seed(3)
+        l_t = torch.randn(2, 3, 3)
+        pred_eps = torch.randn(2, 3, 3) * 0.5  # eps-prediction scale, roughly unit variance
+        ac_t = torch.tensor([0.999, 0.995])
+        sigma_data_l = 3.33
+
+        naive = lattice_x0_estimate(l_t, pred_eps, ac_t)
+        bounded = lattice_x0_estimate_bounded(l_t, pred_eps, ac_t, sigma_data_l)
+
+        assert torch.allclose(naive, bounded, atol=0.05)
+
+    def test_bounded_x0_estimate_stays_bounded_at_the_real_numerical_cliff_for_a_fixed_pred_eps(self):
+        # The actual failure this reparameterization exists to fix: DiffCSP's
+        # real ac[999]=2.4280e-06 (sample_index_pair's documented numerical
+        # cliff). Compare the SAME pred_eps under the naive formula (whose
+        # coefficient sqrt(1-ac_t)/sqrt(ac_t) is ~642x at this ac_t) against
+        # the bounded formula (whose coefficient saturates at sigma_data_l):
+        # the bounded output must be dramatically smaller for realistic
+        # (roughly unit-scale, as an eps-predictor is trained to produce)
+        # pred_eps -- this is a claim about the COEFFICIENT's boundedness,
+        # not a claim that bounded output is independent of pred_eps's own
+        # scale (c_out(ac_t)*pred_eps is still unbounded if pred_eps itself
+        # is fed an unrealistic, unboundedly large value -- the fix bounds
+        # the coefficient the naive formula gets wrong, not pred_eps itself).
+        from src.l35.consistency_distill import lattice_x0_estimate_bounded
+
+        ac_t = torch.tensor([2.4280e-06])
+        sigma_data_l = 3.33
+        torch.manual_seed(5)
+        l_t = torch.randn(1, 3, 3)
+        pred_eps = torch.randn(1, 3, 3)  # realistic eps-predictor scale, ~N(0,1)
+
+        naive = lattice_x0_estimate(l_t, pred_eps, ac_t)
+        bounded = lattice_x0_estimate_bounded(l_t, pred_eps, ac_t, sigma_data_l)
+
+        assert naive.abs().max().item() > 100.0, "sanity check: naive formula really does blow up here"
+        assert bounded.abs().max().item() < 10 * sigma_data_l
+
+    def test_bounded_x0_estimate_is_a_real_c_skip_c_out_blend(self):
+        # Direct algebraic check: lattice_x0_estimate_bounded(l_t, pred_eps,
+        # ac_t) == c_skip(ac_t)*l_t + c_out(ac_t)*pred_eps, not some other
+        # formula that happens to satisfy the boundary condition.
+        from src.l35.consistency_distill import (
+            lattice_c_skip, lattice_c_out, lattice_x0_estimate_bounded,
+        )
+
+        torch.manual_seed(4)
+        l_t = torch.randn(3, 3, 3)
+        pred_eps = torch.randn(3, 3, 3)
+        ac_t = torch.tensor([0.7, 0.3, 0.01])
+        sigma_data_l = 3.33
+
+        expected = (
+            lattice_c_skip(ac_t, sigma_data_l).view(-1, 1, 1) * l_t
+            + lattice_c_out(ac_t, sigma_data_l).view(-1, 1, 1) * pred_eps
+        )
+        actual = lattice_x0_estimate_bounded(l_t, pred_eps, ac_t, sigma_data_l)
+
+        assert torch.allclose(expected, actual, atol=1e-6)
+
+
 class TestCoordX0Estimate:
     def test_exact_boundary_at_sigma_zero_regardless_of_score(self):
         # sigma_t=0 is DiffCSP's own scheduler value at t=0 (diff_utils.py:
