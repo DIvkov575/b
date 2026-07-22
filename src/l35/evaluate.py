@@ -95,15 +95,24 @@ def run_eval(
     sampler_fn=None,
 ):
     """For each real ground-truth structure in results, and for each
-    (name, network, num_steps) in sampler_configs: sample via sampler_fn
-    from the real ground-truth composition, then run RecEval + validity_rates
-    against ground truth.
+    config in sampler_configs: sample via that config's sampler function
+    from the real ground-truth composition, then run RecEval +
+    validity_rates against ground truth.
 
-    sampler_fn defaults to few_step_sample (the deterministic respaced
-    DDIM/PF-ODE solver) but accepts any callable with the same signature --
-    in particular src.l35.sample.multistep_consistency_sample, the genuine
-    consistency sampler (Song et al. 2023 Algorithm 1) that lets a single
-    trained student be evaluated at multiple NFEs without retraining.
+    Each entry in sampler_configs is either a 3-tuple (name, network,
+    num_steps) -- uses the sweep-wide sampler_fn (or few_step_sample if
+    that's also unset) -- or a 4-tuple (name, network, num_steps,
+    config_sampler_fn) that OVERRIDES the sampler for that config only.
+    The override exists because a teacher network was never trained as a
+    consistency function: mixing a consistency-distilled student (sampled
+    via src.l35.sample.multistep_consistency_sample, Song et al. 2023
+    Algorithm 1) with an untrained-teacher baseline (which must stay on
+    few_step_sample, the respaced DDIM/PF-ODE solver, for a fair few-step
+    comparison) in the SAME sweep requires different sampler functions for
+    different configs, not one sampler_fn applied uniformly.
+
+    sampler_fn (the sweep-wide default, used by any 3-tuple config) itself
+    defaults to few_step_sample if left unset.
 
     sampler_configs lets a single eval run directly compare e.g.
     ("teacher@1000", teacher, 1000), ("teacher@8", teacher, 8), and
@@ -141,10 +150,18 @@ def run_eval(
         # module's own docstrings elsewhere warn about).
         sampler_fn = globals()["few_step_sample"]
 
+    # Normalize every config to a 4-tuple: a 3-tuple config falls back to
+    # the sweep-wide sampler_fn; a 4-tuple config's own sampler_fn
+    # overrides it (see docstring for why -- an untrained teacher must
+    # never be sampled via a consistency sampler it wasn't trained for).
+    normalized_configs = [
+        cfg if len(cfg) == 4 else (cfg[0], cfg[1], cfg[2], sampler_fn) for cfg in sampler_configs
+    ]
+
     base_seed = generator.initial_seed() if generator is not None else None
 
     gt_dicts = []
-    sampled_dicts = {name: [] for name, _, _ in sampler_configs}
+    sampled_dicts = {name: [] for name, _, _, _ in normalized_configs}
 
     for i, result in enumerate(results):
         gt_dict = ground_truth_crystal_dict(result)
@@ -154,10 +171,10 @@ def run_eval(
         num_atoms = torch.tensor([len(gt_dict["atom_types"])], device=device)
         node2graph = torch.zeros(len(gt_dict["atom_types"]), dtype=torch.long, device=device)
 
-        for name, network, num_steps in sampler_configs:
+        for name, network, num_steps, config_sampler_fn in normalized_configs:
             if generator is not None:
                 generator.manual_seed(base_seed + i)
-            fc, lattices = sampler_fn(
+            fc, lattices = config_sampler_fn(
                 network, atom_types, num_atoms, node2graph, num_steps,
                 beta_scheduler, sigma_scheduler, max_timestep, generator=generator,
             )
@@ -166,7 +183,7 @@ def run_eval(
     gt_crys = [Crystal(d) for d in gt_dicts]
 
     all_metrics = {}
-    for name, _, _ in sampler_configs:
+    for name, _, _, _ in normalized_configs:
         crys = [Crystal(d) for d in sampled_dicts[name]]
         metrics = RecEval(crys, gt_crys).get_metrics()
         metrics.update(validity_rates(crys))
@@ -201,7 +218,8 @@ def run_multi_seed_sweep(
         )
 
     sweep = {}
-    for name, _, _ in sampler_configs:
+    for cfg in sampler_configs:
+        name = cfg[0]
         metric_names = per_seed_results[0][name].keys()
         sweep[name] = {
             metric_name: [seed_result[name][metric_name] for seed_result in per_seed_results]
@@ -362,13 +380,23 @@ def main():
     # Swept across multiple NFE values in one pass (same ground truth, same
     # generator state per structure) for an efficiency-quality curve rather
     # than a single operating point.
+    #
+    # The teacher config ALWAYS pins few_step_sample explicitly (a 4-tuple
+    # override), regardless of --consistency_sampler: the teacher was never
+    # trained as a consistency function, so running it through
+    # multistep_consistency_sample would test something meaningless (an
+    # arbitrary network's behavior under Algorithm 1's renoise-then-jump
+    # scheme), not a fair few-step ODE-solver baseline. Only the student
+    # config's sampler follows --consistency_sampler.
     student_num_steps_list = [int(s) for s in args.student_num_steps.split(",")]
-    sampler_configs = [(f"teacher@{args.teacher_num_steps}", teacher, args.teacher_num_steps)]
+    sampler_configs = [
+        (f"teacher@{args.teacher_num_steps}", teacher, args.teacher_num_steps, few_step_sample)
+    ]
+    student_sampler_fn = multistep_consistency_sample if args.consistency_sampler else few_step_sample
     for n in student_num_steps_list:
-        sampler_configs.append((f"teacher@{n}", teacher, n))
-        sampler_configs.append((f"student@{n}", student, n))
+        sampler_configs.append((f"teacher@{n}", teacher, n, few_step_sample))
+        sampler_configs.append((f"student@{n}", student, n, student_sampler_fn))
 
-    sampler_fn = multistep_consistency_sample if args.consistency_sampler else few_step_sample
     sampler_label = "genuine consistency sampler (Algorithm 1)" if args.consistency_sampler else (
         "homebrew respaced DDIM/PF-ODE sampler"
     )
@@ -378,7 +406,6 @@ def main():
         all_metrics = run_eval(
             sampler_configs, results, beta_scheduler, sigma_scheduler,
             max_timestep=beta_scheduler.timesteps, device=device, generator=generator,
-            sampler_fn=sampler_fn,
         )
         for name, metrics in all_metrics.items():
             print(f"{name} ({sampler_label}): {metrics}")
@@ -389,7 +416,6 @@ def main():
         sweep = run_multi_seed_sweep(
             sampler_configs, results, beta_scheduler, sigma_scheduler,
             max_timestep=beta_scheduler.timesteps, device=device, seeds=seeds,
-            sampler_fn=sampler_fn,
         )
         for name, per_metric in sweep.items():
             agg = aggregate_across_seeds(per_metric["match_rate"])

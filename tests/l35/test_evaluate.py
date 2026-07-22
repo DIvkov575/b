@@ -258,6 +258,68 @@ def test_run_eval_accepts_a_different_sampler_fn():
         assert set(metrics.keys()) >= {"match_rate", "rms_dist", "constructed", "comp_valid", "struct_valid", "valid"}
 
 
+def test_run_eval_accepts_a_per_config_sampler_fn_override():
+    # A single sweep must be able to mix samplers PER CONFIG: the teacher
+    # was never trained as a consistency function, so it must always use
+    # few_step_sample (the respaced ODE solver) even when the student in
+    # the SAME sweep uses multistep_consistency_sample (the sampler it was
+    # actually trained for). A single global sampler_fn applied uniformly
+    # to every config in sampler_configs would silently run the teacher
+    # through Algorithm 1 too, which tests something meaningless (an
+    # arbitrary network's behavior under consistency sampling) rather than
+    # a fair few-step baseline.
+    import src.l35.torch_scatter_compat_shim  # noqa: F401
+    import torch
+    import torch.nn as nn
+    from diffcsp.pl_modules.diff_utils import BetaScheduler, SigmaScheduler
+
+    import src.l35.evaluate as evaluate_module
+    from src.l35.sample import multistep_consistency_sample
+    from tests.l35.test_real_data_slice import _load_n_real_rows
+
+    class ConstantDecoder(nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    teacher = ConstantDecoder()
+    student = ConstantDecoder()
+    beta_scheduler = BetaScheduler(timesteps=1000, scheduler_mode="cosine")
+    sigma_scheduler = SigmaScheduler(timesteps=1000, sigma_begin=0.005, sigma_end=0.5)
+    results = _load_n_real_rows(n=1)
+
+    real_few_step_sample = evaluate_module.few_step_sample
+    real_consistency_sample = multistep_consistency_sample
+    calls = {"few_step": 0, "consistency": 0}
+
+    def _spy_few_step(*args, **kwargs):
+        calls["few_step"] += 1
+        return real_few_step_sample(*args, **kwargs)
+
+    def _spy_consistency(*args, **kwargs):
+        calls["consistency"] += 1
+        return real_consistency_sample(*args, **kwargs)
+
+    # 4-tuple entries carry a per-config sampler override, checked here by
+    # passing distinct spies directly -- no module-level monkeypatch
+    # needed, since the override is passed explicitly per config rather
+    # than resolved from evaluate_module's globals (that resolution path
+    # is exercised separately by test_run_eval_default_sampler_fn_is_
+    # unchanged, for 3-tuple configs with no explicit override).
+    sampler_configs = [
+        ("teacher@8", teacher, 8, _spy_few_step),
+        ("student@8", student, 8, _spy_consistency),
+    ]
+    evaluate_module.run_eval(
+        sampler_configs, results, beta_scheduler, sigma_scheduler,
+        max_timestep=1000, device=torch.device("cpu"), generator=torch.Generator().manual_seed(0),
+    )
+
+    assert calls["few_step"] == 1, "teacher config must use its explicit few_step_sample override"
+    assert calls["consistency"] == 1, "student config must use its explicit consistency-sampler override"
+
+
 def test_run_eval_default_sampler_fn_is_unchanged(monkeypatch):
     # Regression guard: adding the sampler_fn parameter must not change
     # run_eval's DEFAULT behavior for any existing caller that doesn't pass
