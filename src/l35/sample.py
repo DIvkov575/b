@@ -143,8 +143,8 @@ def multistep_consistency_sample(
             # not the raw previous NOISED input -- consistency sampling
             # walks between x0 ESTIMATES, never between intermediate
             # noised states the way an ODE solver does.
-            rand_l = torch.randn(l0_hat.shape, generator=generator).to(device)
-            rand_x = torch.randn(x0_hat.shape, generator=generator).to(device)
+            rand_l = torch.randn(l0_hat.shape, generator=generator, device=device)
+            rand_x = torch.randn(x0_hat.shape, generator=generator, device=device)
             l_t = lattice_forward_noise(l0_hat, rand_l, ac_t)
             x_t = coord_forward_noise(x0_hat, rand_x, sigma_t_per_atom)
 

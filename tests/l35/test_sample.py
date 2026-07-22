@@ -294,6 +294,54 @@ def test_multistep_consistency_sample_num_steps_one_is_pure_one_shot_generation(
     assert torch.isfinite(lattices).all()
 
 
+def test_multistep_consistency_sample_renoise_step_works_with_a_non_cpu_generator():
+    # Regression test for a real bug caught on a real EC2 CUDA eval run:
+    # multistep_consistency_sample's initial noise draw (l_t/x_t) passes
+    # device=device alongside generator=generator, matching a
+    # torch.Generator(device="cuda")/("mps") caller -- but the RENOISE step
+    # (between grid points, for num_steps>1) omitted device= entirely,
+    # defaulting to CPU while still receiving the non-CPU generator.
+    # torch.randn(..., generator=<non-cpu>) with no explicit device raises
+    # "Expected a 'cpu' device type for generator but found '<device>'".
+    # MPS is used here as a real non-CPU device available in this test
+    # environment (no CUDA locally); the failure mode is identical for
+    # CUDA, which is what the real eval run actually hit.
+    import torch
+
+    from src.l35.sample import multistep_consistency_sample
+
+    if not torch.backends.mps.is_available():
+        pytest.skip("no non-CPU device available to reproduce the device mismatch")
+
+    device = torch.device("mps")
+    beta_scheduler, sigma_scheduler = _real_schedulers()
+
+    class ConstantDecoder(torch.nn.Module):
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            return torch.zeros(batch_size, 3, 3, device=lattices.device), torch.zeros(
+                num_nodes, 3, device=frac_coords.device
+            )
+
+    decoder = ConstantDecoder()
+    num_atoms = torch.tensor([3], device=device)
+    node2graph = torch.tensor([0, 0, 0], device=device)
+    atom_types = torch.tensor([1, 6, 8], device=device)
+
+    # num_steps > 1 is required to exercise the renoise branch (i > 0);
+    # num_steps=1 never hits it, which is exactly how this bug shipped
+    # past the existing num_steps=1 test above.
+    frac_coords, lattices = multistep_consistency_sample(
+        decoder, atom_types, num_atoms, node2graph, num_steps=4,
+        beta_scheduler=beta_scheduler.to(device), sigma_scheduler=sigma_scheduler.to(device),
+        max_timestep=1000, generator=torch.Generator(device=device).manual_seed(0),
+    )
+
+    assert torch.isfinite(frac_coords).all()
+    assert torch.isfinite(lattices).all()
+
+
 def test_multistep_consistency_sample_grid_spans_full_noise_range_regardless_of_num_steps():
     # Unlike few_step_sample (whose grid is built from num_steps+1 points
     # spanning [0, max_timestep-1]), multistep_consistency_sample's grid
