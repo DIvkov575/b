@@ -4,6 +4,9 @@ import pytest
 from src.l38.l42_steering_repro import (
     difference_of_means_vector,
     dose_response_is_monotonic_then_collapsing,
+    is_degenerate_sequence,
+    ivywrel_fraction,
+    paired_bootstrap_mean_diff,
     renormalize_to_original_norm,
     split_by_percentile,
 )
@@ -96,3 +99,80 @@ def test_dose_response_requires_matching_lengths():
 
 def test_dose_response_false_for_single_point():
     assert dose_response_is_monotonic_then_collapsing([0.0], [1.0]) is False
+
+
+def test_is_degenerate_sequence_flags_poly_leucine_collapse():
+    # Real observed collapse artifact from the L42 run (docs/L42_STEERING_REPRO.md):
+    # sustained runs of a single residue well past what real proteins show.
+    poly_leucine = "MAQTLPIAEQMALLNNSLDTLFAADLSLRLLNATCPARLQNSVDQRKILRSFLDLLLSL"
+    assert is_degenerate_sequence(poly_leucine) is True
+
+
+def test_is_degenerate_sequence_does_not_flag_healthy_baseline():
+    # Real unsteered-baseline generated sequence from the same run -- max
+    # single-residue fraction 0.227, below the 0.25 threshold.
+    baseline = "MNTEELKELIQKSVALLEQTEELHELLQEEPEEVERIVSLPEEERLERLKEEVIRLIQEVPQMLEELHQLLEEAGLLEYVSPILEEVEGLFMAPPKELNEETGLAALMDELFLAERLLEEVNDEYIMRVGDPMIPFDMTMLHEIVHSLIGEPYANELEQVLMIATLGLFGLELLYEKNDLLLLFMDKKLNDLLIELLQRLLEMSTQMGLDSLLQFN"
+    assert is_degenerate_sequence(baseline) is False
+
+
+def test_is_degenerate_sequence_threshold_is_configurable():
+    seq = "AABB"  # max single-char fraction = 0.5
+    assert is_degenerate_sequence(seq, max_single_aa_fraction=0.6) is False
+    assert is_degenerate_sequence(seq, max_single_aa_fraction=0.4) is True
+
+
+def test_is_degenerate_sequence_rejects_empty_sequence():
+    with pytest.raises(ValueError):
+        is_degenerate_sequence("")
+
+
+def test_paired_bootstrap_mean_diff_detects_clear_positive_shift():
+    rng = np.random.RandomState(0)
+    scores_a = rng.normal(loc=0.0, scale=0.1, size=200)
+    scores_b = scores_a + 1.0  # every paired item shifts by exactly 1.0
+    result = paired_bootstrap_mean_diff(scores_a, scores_b, n_boot=2000, seed=1)
+    assert result["point_estimate"] == pytest.approx(1.0, abs=0.05)
+    assert result["ci_lower"] > 0.0
+    assert result["significant_at_95pct"] is True
+
+
+def test_paired_bootstrap_mean_diff_null_when_no_real_difference():
+    # seed=1 (data) confirmed to draw a near-zero mean diff here; a generic
+    # seed would occasionally land in the ~5% tail by chance and flake.
+    rng = np.random.RandomState(1)
+    scores_a = rng.normal(loc=0.0, scale=1.0, size=200)
+    scores_b = rng.normal(loc=0.0, scale=1.0, size=200)  # independent noise, no shift
+    result = paired_bootstrap_mean_diff(scores_a, scores_b, n_boot=2000, seed=1)
+    assert result["significant_at_95pct"] is False
+
+
+def test_paired_bootstrap_mean_diff_rejects_mismatched_lengths():
+    with pytest.raises(ValueError):
+        paired_bootstrap_mean_diff(np.array([1.0, 2.0]), np.array([1.0]))
+
+
+def test_paired_bootstrap_mean_diff_rejects_empty_input():
+    with pytest.raises(ValueError):
+        paired_bootstrap_mean_diff(np.array([]), np.array([]))
+
+
+def test_ivywrel_fraction_all_ivywrel_residues():
+    assert ivywrel_fraction("IVYWREL") == pytest.approx(1.0)
+
+
+def test_ivywrel_fraction_no_ivywrel_residues():
+    assert ivywrel_fraction("ACDGHKMNPQSTF") == pytest.approx(0.0)
+
+
+def test_ivywrel_fraction_mixed_sequence():
+    # "LL" (2 IVYWREL residues) + "AA" (0) = 2/4
+    assert ivywrel_fraction("LLAA") == pytest.approx(0.5)
+
+
+def test_ivywrel_fraction_respects_custom_residue_set():
+    assert ivywrel_fraction("LLAA", residues=frozenset("A")) == pytest.approx(0.5)
+
+
+def test_ivywrel_fraction_rejects_empty_sequence():
+    with pytest.raises(ValueError):
+        ivywrel_fraction("")

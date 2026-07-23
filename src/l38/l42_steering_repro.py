@@ -105,6 +105,84 @@ def renormalize_to_original_norm(perturbed: np.ndarray, original_norm: np.ndarra
     return perturbed * (target_norm / perturbed_norm)
 
 
+# IVYWREL: the amino acids (Ile, Val, Tyr, Trp, Arg, Glu, Leu) independently
+# documented as enriched in thermophile vs. mesophile proteomes (Zeldovich,
+# Berezovsky & Shakhnovich 2007; Kreil & Ouzounis 2001 "IVYWREL" signature).
+# Used here as a scoring proxy that is NOT derived from anything observed in
+# this project's own generated sequences -- unlike instability_index, which
+# was found to be gameable by this exact steering vector's dominant failure
+# mode (poly-leucine collapse, see docs/L42_STEERING_REPRO.md).
+IVYWREL_RESIDUES = frozenset("IVYWREL")
+
+
+def ivywrel_fraction(sequence: str, residues: frozenset = IVYWREL_RESIDUES) -> float:
+    """Fraction of a sequence's residues in the IVYWREL thermostability-
+    associated set. Higher = more thermostable-like composition, per the
+    independent comparative-genomics literature cited above -- this is a
+    proxy for the property Huang et al. steer toward, not the exact same
+    fitness function they use, since their fitted model isn't available here.
+    """
+    if len(sequence) == 0:
+        raise ValueError("ivywrel_fraction requires a non-empty sequence")
+    return sum(1 for c in sequence if c in residues) / len(sequence)
+
+
+def is_degenerate_sequence(sequence: str, max_single_aa_fraction: float = 0.25) -> bool:
+    """Flags homopolymer-collapse artifacts (e.g. poly-leucine) BEFORE any
+    stability scoring -- confirmed via manual inspection (docs/L42_STEERING_REPRO.md)
+    that the instability-index proxy is gameable by exactly this artifact
+    (leucine-heavy sequences score as artificially "stable"). Filtering
+    degenerate sequences out first, rather than trying to build a score
+    robust to them, removes the confound instead of fighting it.
+
+    Threshold calibrated against real generated data: unsteered-baseline and
+    non-collapsed steered sequences top out at max_single_aa_fraction=0.227;
+    confirmed-collapsed sequences (alpha>=1.0 in the L42 diagnostic run)
+    start at 0.319. 0.25 sits in the clean gap between the two.
+    """
+    if len(sequence) == 0:
+        raise ValueError("is_degenerate_sequence requires a non-empty sequence")
+    counts = {}
+    for c in sequence:
+        counts[c] = counts.get(c, 0) + 1
+    return (max(counts.values()) / len(sequence)) > max_single_aa_fraction
+
+
+def paired_bootstrap_mean_diff(scores_a: np.ndarray, scores_b: np.ndarray, n_boot: int = 10000, seed: int = 0) -> dict:
+    """Bootstrap CI for mean(scores_b - scores_a), pairing on shared indices
+    (e.g. the same held-out eval sequences scored under two conditions).
+    Mirrors virion_eval.py's paired_bootstrap_metric_diff but for a plain
+    per-item score array rather than a classifier metric recomputed per
+    resample -- correct here because the "metric" (mean score) is already
+    linear, so resampling the precomputed per-item diffs is equivalent to
+    (and much cheaper than) rerunning scoring on each bootstrap resample.
+    """
+    scores_a = np.asarray(scores_a, dtype=float)
+    scores_b = np.asarray(scores_b, dtype=float)
+    if len(scores_a) != len(scores_b):
+        raise ValueError("scores_a and scores_b must have the same length")
+    if len(scores_a) == 0:
+        raise ValueError("paired_bootstrap_mean_diff requires at least one paired observation")
+
+    diffs = scores_b - scores_a
+    n = len(diffs)
+    rng = np.random.RandomState(seed)
+    boot_means = np.empty(n_boot)
+    for i in range(n_boot):
+        idx = rng.randint(0, n, size=n)
+        boot_means[i] = diffs[idx].mean()
+
+    ci_lower = float(np.percentile(boot_means, 2.5))
+    ci_upper = float(np.percentile(boot_means, 97.5))
+    return {
+        "point_estimate": float(diffs.mean()),
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "significant_at_95pct": bool(ci_lower > 0 or ci_upper < 0),
+        "n": n,
+    }
+
+
 def dose_response_is_monotonic_then_collapsing(alphas: List[float], effects: List[float], collapse_tolerance: float = 0.0) -> bool:
     """Check for the qualitative dose-response shape Huang et al. report:
     effect increases with alpha up to some point, then may collapse

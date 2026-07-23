@@ -166,21 +166,75 @@ regime that might contain a real, uncontaminated signal, but the effect
 size there is small and hasn't been checked against a proper significance
 test (no bootstrap CI computed yet, unlike L39's rigor).
 
-## Honest verdict: reproduction inconclusive, not confirmed
+## RESULTS v2 (2026-07-22) — clean reproduction, confined to low alpha
 
-**This has NOT reproduced Huang et al.'s result cleanly.** What it has done:
-found and fixed two real, load-bearing methodology bugs (wrong alpha/mask
-scale; a confounded scoring metric), and discovered that the specific
-difference-of-means direction constructed here has a dominant failure mode
-(collapse toward leucine) that contaminates evaluation at the alpha range
-where the effect is large enough to matter. Two honest paths forward, not
-yet taken: (a) restrict analysis to the low-alpha (0.1–0.5), non-collapsed
-regime and properly bootstrap it for significance, accepting a possibly
-small/inconclusive effect size, or (b) diagnose why leucine-collapse
-specifically dominates this direction (composition mismatch between the
-low/high Tm groups used to build it?) before trusting any alpha range.
-Neither has been done. **Do not build a new-target experiment on this
-harness yet** — the harness itself just produced a false-positive-looking
-PASS that only fell apart on manual inspection of the raw generated text,
-which is exactly the failure mode this reproduction check was meant to
-catch before it could contaminate a new claim.
+Both open paths from the v1 verdict were resolved, not left as a choice:
+
+**(b) first — why does this direction collapse to leucine?** Checked the
+actual composition of the low/high-Tm groups used to build the vector (pure
+pandas, no GPU). The high-Tm group is enriched in L (+2.6pp), R (+2.1pp), A
+(+1.7pp), G (+1.4pp) and depleted in K (−1.9pp), S (−1.7pp), Q/N/T/D
+(−1.0 to −1.1pp each) relative to the low-Tm group. This is NOT a data-split
+artifact — it matches the independently-published **IVYWREL** thermostability
+signature from comparative thermophile/mesophile proteome genomics
+(Zeldovich, Berezovsky & Shakhnovich 2007; Kreil & Ouzounis 2001): real
+thermostable proteins really are enriched in I/V/Y/W/R/E/L (including the
+classic Arg-for-Lys salt-bridge swap, R↑/K↓, seen directly in the
+substitution counts at alpha=0.1: R and E gained, N and K lost). **The vector
+correctly encodes real thermostability biology; leucine collapse is a
+decoding-time degeneracy of single-shot argmax mask-fill at higher alpha, not
+a construction bug.**
+
+**(a) next — restrict to low alpha, filter degeneracy, bootstrap properly.**
+Rather than trying to build one score immune to collapse, added
+`is_degenerate_sequence()` (flags any sequence where one residue exceeds 25%
+frequency — calibrated against real data: healthy baseline sequences top out
+at 22.7%, confirmed-collapsed sequences start at 31.9%) and filter BEFORE
+scoring. Replaced the gameable instability-index proxy with `ivywrel_fraction`
+— the same independently-documented compositional marker above, verified to
+NOT be "leucine in disguise" by rechecking with leucine excluded from the
+residue set entirely (still significant at low alpha, see below).
+
+Reran the full pipeline on ESM2-650M/A10G with the corrected script. Final
+automated verdict, using a direct real-vs-random paired bootstrap (not two
+separate vs.-baseline tests) and a minimum-30-surviving-pairs guard before
+trusting any CI:
+
+| alpha | real mean | random mean | non-degenerate pairs | real vs random diff (95% CI) | significant |
+|-------|-----------|-------------|----------------------|-------------------------------|--------------|
+| 0.1   | 0.4108    | 0.4043      | 58/60                | +0.0069 [0.0040, 0.0101]     | **yes** |
+| 0.25  | 0.4263    | 0.4047      | 58/60                | +0.0224 [0.0178, 0.0270]     | **yes** |
+| 0.5   | 0.4540    | 0.4055      | 57/60                | +0.0498 [0.0435, 0.0563]     | **yes** |
+| 1.0   | 0.5427    | 0.4076      | 5/60 (excluded)       | n/a — below trust threshold  | excluded |
+| 2.0   | 0.5652    | 0.4215      | 0/60 (excluded)       | n/a — below trust threshold  | excluded |
+
+alpha=1.0/2.0 are excluded from the verdict by design (55/60 and 60/60
+sequences degenerate respectively — including alpha=1.0's five "survivors,"
+which manual inspection showed still carry a milder, sub-threshold version of
+the same leucine bias; a 5-sample CI is not trustworthy regardless of what it
+says). This is the correct behavior, not a workaround: it's exactly the
+mechanism that produced the v1 false-positive PASS.
+
+At alpha=0.1–0.5: clean, monotonic dose-response (+0.007 → +0.022 → +0.050),
+real direction beats random control head-to-head at every alpha, on 57–58 of
+60 held-out sequences intact. Per-sequence check confirms this is a broad
+shift (72–75% of individual sequences move in the same direction at every
+alpha), not a mean dragged by outliers. Effect survives with leucine excluded
+from the IVYWREL residue set entirely (diff at alpha=0.5 drops from +0.050 to
++0.019 but stays significant, [0.012, 0.026]) — ruling out "this is just
+leucine collapse rebranded."
+
+## Honest verdict: reproduction CONFIRMED, confined to alpha in [0.1, 0.5]
+
+**Huang et al.'s qualitative finding reproduces cleanly in this harness** —
+real difference-of-means steering significantly increases a thermostability
+proxy relative to a matched-norm random control, with a clear dose-response,
+in the low-alpha regime. It does NOT reproduce at alpha ≥ 1.0, but that's
+because the eval methodology (single-shot argmax mask-fill at mask_frac=0.3)
+degenerates there, not because the steering vector or technique is wrong —
+confirmed via the composition check above and the leucine-exclusion check.
+**This harness is now trustworthy for a new-target experiment**, with two
+carried-forward constraints: (1) always run the degeneracy filter before
+trusting any score from generated sequences, (2) treat any alpha ≥ 1.0 in
+this generation setup as out of the safe operating range unless mask
+fraction or decoding strategy changes first.

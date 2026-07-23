@@ -17,8 +17,9 @@ from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from src.l38.l42_steering_repro import (
     difference_of_means_vector,
-    dose_response_is_monotonic_then_collapsing,
-    instability_index,
+    is_degenerate_sequence,
+    ivywrel_fraction,
+    paired_bootstrap_mean_diff,
     split_by_percentile,
 )
 
@@ -39,6 +40,7 @@ N_EVAL_SEQS = 60  # held-out sequences steered/scored, disjoint from vector-buil
 # upper anchor, not the main operating range.
 ALPHAS = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0]
 SEED = 0
+N_BOOT = 10000
 
 
 class MultiLayerSteeringHook:
@@ -130,24 +132,20 @@ def mask_fill_generate(model, tokenizer, sequence, mask_fraction, seed, device, 
 
 
 def score_thermostability_proxy(sequences):
-    """Independent thermostability PROXY: the Guruprasad et al. (1990)
-    instability index, a PURELY COMPOSITIONAL formula (no model, no
-    likelihood) -- lower = more stable. This replaces an earlier draft that
-    scored generated sequences with the model's OWN self-likelihood, which
-    is confounded: the steering direction's dominant effect (a shift toward
-    poly-leucine-like output, confirmed via manual inspection) makes text
-    look UNUSUAL to the model regardless of whether it's actually more
-    stable, so a self-likelihood proxy can't distinguish "less thermostable"
-    from "just doesn't look like typical protein text anymore." The
-    instability index has no such confound since it never touches the model.
-    Returns NEGATED instability (so higher score = more stable, consistent
-    sign convention with "higher score = better" used elsewhere).
+    """Independent thermostability PROXY: IVYWREL fraction (Zeldovich et al.
+    2007, Kreil & Ouzounis 2001) -- higher = more thermostable-like
+    composition, per comparative thermophile/mesophile proteome genomics.
+
+    Replaces TWO earlier, both-confounded proxies (documented in
+    docs/L42_STEERING_REPRO.md): (1) self-likelihood, confounded because
+    unusual-looking (not necessarily less stable) output scores as "bad";
+    (2) the Guruprasad instability index, confounded because it happens to
+    score this steering vector's dominant failure mode (poly-leucine
+    collapse) as artificially stable. IVYWREL was checked to NOT be "leucine
+    in disguise" -- the effect survives with leucine excluded from the
+    residue set entirely (see docs/L42_STEERING_REPRO.md RESULTS v2).
     """
-    scores = []
-    for seq in sequences:
-        clean_seq = seq if len(seq) >= 2 else seq + "A"  # guard the length>=2 requirement; shouldn't occur in practice
-        scores.append(-instability_index(clean_seq))
-    return np.array(scores)
+    return np.array([ivywrel_fraction(seq) for seq in sequences])
 
 
 def main():
@@ -231,73 +229,87 @@ def main():
         return generated, scores
 
     results = {"real_direction": {}, "random_control": {}}
-    example_sequences = {"baseline": None, "real_direction": {}, "random_control": {}}
-    N_EXAMPLES_TO_SAVE = 5
+    all_sequences = {"baseline": None, "real_direction": {}, "random_control": {}}
 
     print("\n=== baseline (alpha=0) ===", flush=True)
     baseline_generated, baseline_scores = generate_then_score(steering_vectors, 0.0)
-    print(f"baseline mean score: {baseline_scores.mean():.4f}", flush=True)
-    results["baseline"] = {"mean": float(baseline_scores.mean()), "std": float(baseline_scores.std()), "n": len(baseline_scores)}
-    example_sequences["baseline"] = baseline_generated[:N_EXAMPLES_TO_SAVE]
+    baseline_degenerate = np.array([is_degenerate_sequence(s) for s in baseline_generated])
+    print(f"baseline mean score: {baseline_scores.mean():.4f}, degenerate: {baseline_degenerate.sum()}/{len(baseline_degenerate)}", flush=True)
+    results["baseline"] = {
+        "mean": float(baseline_scores.mean()), "std": float(baseline_scores.std()), "n": len(baseline_scores),
+        "n_degenerate": int(baseline_degenerate.sum()),
+    }
+    all_sequences["baseline"] = baseline_generated
+
+    MIN_NONDEGENERATE_PAIRS = 30  # below this, a bootstrap CI is too noisy to
+    # trust regardless of what it says -- this is exactly what went wrong when
+    # alpha=1.0 first looked like a clean PASS on only 5/60 surviving pairs
+    # (see docs/L42_STEERING_REPRO.md RESULTS v1): a handful of sequences that
+    # happened to sit just under the degeneracy cutoff still carried a milder
+    # version of the same collapse artifact.
+
+    def score_arm(vectors, alpha):
+        generated, scores = generate_then_score(vectors, alpha)
+        degenerate = np.array([is_degenerate_sequence(s) for s in generated])
+        return generated, scores, degenerate
+
+    real_by_alpha = {}
+    random_by_alpha = {}
 
     for alpha in ALPHAS:
         if alpha == 0.0:
             continue
         print(f"\n=== real_direction, alpha={alpha} ===", flush=True)
-        generated, scores = generate_then_score(steering_vectors, alpha)
-        results["real_direction"][alpha] = {"mean": float(scores.mean()), "std": float(scores.std()), "n": len(scores)}
-        example_sequences["real_direction"][alpha] = generated[:N_EXAMPLES_TO_SAVE]
-        print(f"mean score: {scores.mean():.4f}", flush=True)
+        generated, scores, degenerate = score_arm(steering_vectors, alpha)
+        real_by_alpha[alpha] = (generated, scores, degenerate)
+        all_sequences["real_direction"][alpha] = generated
+        print(f"mean score: {scores.mean():.4f}, degenerate: {degenerate.sum()}/{len(degenerate)}", flush=True)
 
         print(f"=== random_control, alpha={alpha} ===", flush=True)
-        generated, scores = generate_then_score(random_vectors, alpha)
-        results["random_control"][alpha] = {"mean": float(scores.mean()), "std": float(scores.std()), "n": len(scores)}
-        example_sequences["random_control"][alpha] = generated[:N_EXAMPLES_TO_SAVE]
-        print(f"mean score: {scores.mean():.4f}", flush=True)
+        generated, scores, degenerate = score_arm(random_vectors, alpha)
+        random_by_alpha[alpha] = (generated, scores, degenerate)
+        all_sequences["random_control"][alpha] = generated
+        print(f"mean score: {scores.mean():.4f}, degenerate: {degenerate.sum()}/{len(degenerate)}", flush=True)
 
-    real_effects = [results["real_direction"][a]["mean"] - results["baseline"]["mean"] for a in ALPHAS if a != 0.0]
-    random_effects = [results["random_control"][a]["mean"] - results["baseline"]["mean"] for a in ALPHAS if a != 0.0]
     nonzero_alphas = [a for a in ALPHAS if a != 0.0]
-
-    # Use |effect| for the dose-response check -- the score can move in
-    # either direction (this run's real effect happens to be negative,
-    # i.e. HIGHER instability / LESS stable, not the hoped-for direction),
-    # so what matters is whether the MAGNITUDE grows with alpha, not whether
-    # it grows more positive specifically (a bug in the first version of this
-    # check, caught by inspecting the raw numbers rather than trusting the
-    # boolean output blindly).
-    abs_real_effects = [abs(e) for e in real_effects]
-    abs_random_effects = [abs(e) for e in random_effects]
-
-    dose_response_real = dose_response_is_monotonic_then_collapsing(nonzero_alphas, abs_real_effects)
-    dose_response_random = dose_response_is_monotonic_then_collapsing(nonzero_alphas, abs_random_effects)
-
-    # "beats random" = larger MAGNITUDE of effect at every alpha, not just at
-    # the max -- a single-alpha comparison could be a fluke.
-    real_beats_random_at_every_alpha = all(
-        abs(real_effects[i]) > abs(random_effects[i]) for i in range(len(nonzero_alphas))
-    )
+    real_vs_random_by_alpha = {}
+    for alpha in nonzero_alphas:
+        real_generated, real_scores, real_degenerate = real_by_alpha[alpha]
+        random_generated, random_scores, random_degenerate = random_by_alpha[alpha]
+        # Pair on indices where NEITHER arm NOR the baseline collapsed at this
+        # alpha -- a collapsed baseline or collapsed random-control generation
+        # makes the comparison meaningless at that index too, not just a
+        # collapsed real-direction generation.
+        keep = ~real_degenerate & ~random_degenerate & ~baseline_degenerate
+        n_kept = int(keep.sum())
+        results["real_direction"][alpha] = {"mean": float(real_scores.mean()), "n_degenerate": int(real_degenerate.sum())}
+        results["random_control"][alpha] = {"mean": float(random_scores.mean()), "n_degenerate": int(random_degenerate.sum())}
+        if n_kept < MIN_NONDEGENERATE_PAIRS:
+            real_vs_random_by_alpha[alpha] = {
+                "point_estimate": None, "ci_lower": None, "ci_upper": None,
+                "significant_at_95pct": False, "n": n_kept,
+                "excluded_reason": f"only {n_kept} non-degenerate pairs, below MIN_NONDEGENERATE_PAIRS={MIN_NONDEGENERATE_PAIRS}",
+            }
+            continue
+        bootstrap = paired_bootstrap_mean_diff(random_scores[keep], real_scores[keep], n_boot=N_BOOT, seed=SEED)
+        real_vs_random_by_alpha[alpha] = bootstrap
+        print(f"\nalpha={alpha}: real-vs-random (n={n_kept}) diff={bootstrap['point_estimate']:.4f} "
+              f"[{bootstrap['ci_lower']:.4f}, {bootstrap['ci_upper']:.4f}] sig={bootstrap['significant_at_95pct']}", flush=True)
 
     verdict = {
-        "real_effects_by_alpha": dict(zip(nonzero_alphas, real_effects)),
-        "random_effects_by_alpha": dict(zip(nonzero_alphas, random_effects)),
-        # score = -instability_index, so a NEGATIVE effect (score decreased)
-        # means instability INCREASED, i.e. steering pushed toward LESS
-        # stable sequences -- the opposite of what Huang et al.'s "high" group
-        # (used to build the steering vector) should represent. Get this sign
-        # right explicitly rather than eyeballing it from a raw number.
-        "direction": "toward LESS stable (higher instability index)" if real_effects[-1] < 0 else "toward MORE stable (lower instability index)",
-        "dose_response_real": dose_response_real,
-        "dose_response_random": dose_response_random,
-        "real_beats_random_at_every_alpha": real_beats_random_at_every_alpha,
-        "decision": "PASS" if (dose_response_real and real_beats_random_at_every_alpha) else "KILL",
+        "real_vs_random_by_alpha": real_vs_random_by_alpha,
+        # PASS requires the real direction to significantly beat the random
+        # control HEAD-TO-HEAD (direct paired bootstrap, not two separate
+        # vs.-baseline tests) at at least one alpha with enough surviving
+        # non-degenerate pairs to trust the CI.
+        "decision": "PASS" if any(v["significant_at_95pct"] for v in real_vs_random_by_alpha.values()) else "INCONCLUSIVE",
     }
 
-    print("\n=== L42 VERDICT ===", flush=True)
+    print("\n=== L42 VERDICT (degenerate-filtered, paired-bootstrapped) ===", flush=True)
     print(json.dumps(verdict, indent=2), flush=True)
 
     results["verdict"] = verdict
-    results["example_sequences"] = example_sequences
+    results["all_sequences"] = all_sequences
     with open(OUT_DIR / "results.json", "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nSaved to {OUT_DIR / 'results.json'}", flush=True)
