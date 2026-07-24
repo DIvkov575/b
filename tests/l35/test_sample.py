@@ -368,3 +368,63 @@ def test_multistep_consistency_sample_grid_spans_full_noise_range_regardless_of_
 
     grid_one = consistency_sampling_grid(1, max_timestep=1000)
     assert grid_one[-1].item() == 999, "num_steps=1 is a single one-shot call at max noise, not t=0"
+
+
+def test_multistep_consistency_sample_uses_the_bounded_lattice_formula_not_the_naive_one():
+    # Regression test for the real failure this project diagnosed: the
+    # naive lattice_x0_estimate's pred_eps coefficient sqrt(1-ac_t)/sqrt(ac_t)
+    # is unbounded as ac_t -> 0 (~642x at DiffCSP's real ac[999]=2.428e-6),
+    # confirmed empirically to produce geometrically invalid structures
+    # (negative/collapsed lattice determinant) regardless of network
+    # quality. lattice_x0_estimate_bounded (the EDM/Consistency-Models-
+    # style c_skip/c_out blend, consistency_distill.py) fixes this --
+    # multistep_consistency_sample must actually USE it, not just have it
+    # sitting unused in the codebase. Checked directly: with a decoder that
+    # returns a large, adversarial pred_eps (simulating an imperfect but
+    # realistic network output), the naive formula's lattice output at
+    # t=max_timestep-1 diverges far more than the bounded formula's.
+    import torch
+
+    from src.l35.sample import multistep_consistency_sample
+    from src.l35.consistency_distill import lattice_x0_estimate
+
+    beta_scheduler, sigma_scheduler = _real_schedulers()
+
+    class AdversarialDecoder(torch.nn.Module):
+        # Returns a fixed, moderately large pred_eps (~N(0,1) scale, what a
+        # real eps-predictor is trained to produce) regardless of input --
+        # isolates the FORMULA's behavior from any particular network's
+        # learned quality.
+        def forward(self, time_emb, atom_types, frac_coords, lattices, num_atoms, node2graph):
+            batch_size = lattices.shape[0]
+            num_nodes = frac_coords.shape[0]
+            torch.manual_seed(123)
+            return torch.randn(batch_size, 3, 3), torch.zeros(num_nodes, 3)
+
+    decoder = AdversarialDecoder()
+    num_atoms = torch.tensor([3])
+    node2graph = torch.tensor([0, 0, 0])
+    atom_types = torch.tensor([1, 6, 8])
+
+    _, lattices = multistep_consistency_sample(
+        decoder, atom_types, num_atoms, node2graph, num_steps=1,
+        beta_scheduler=beta_scheduler, sigma_scheduler=sigma_scheduler,
+        max_timestep=1000, generator=torch.Generator().manual_seed(0),
+    )
+
+    # Reconstruct what the NAIVE formula would have produced for the same
+    # (l_t, pred_eps, ac_t) to confirm the bounded formula's output is
+    # dramatically smaller -- i.e. multistep_consistency_sample is actually
+    # calling the bounded formula, not the naive one still sitting behind
+    # a different name.
+    ac_999 = beta_scheduler.alphas_cumprod[torch.tensor([999])]
+    torch.manual_seed(0)
+    l_t_replay = torch.randn(1, 3, 3)
+    torch.manual_seed(123)
+    pred_eps_replay = torch.randn(1, 3, 3)
+    naive_lattice = lattice_x0_estimate(l_t_replay, pred_eps_replay, ac_999)
+
+    assert lattices.abs().max().item() < naive_lattice.abs().max().item() / 10, (
+        "multistep_consistency_sample's lattice output must be dramatically smaller than the "
+        "naive formula's at the real numerical cliff -- it isn't using the bounded formula"
+    )

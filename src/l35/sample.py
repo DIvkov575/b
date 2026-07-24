@@ -13,7 +13,7 @@ composition (atom_types, num_atoms):
 - multistep_consistency_sample: genuine consistency sampling (Song et al.
   2023 Algorithm 1) -- one direct decoder call per NFE, each producing an
   x0 estimate straight from the boundary-condition formulas
-  (lattice_x0_estimate/coord_x0_estimate) already validated in
+  (lattice_x0_estimate_bounded/coord_x0_estimate) already validated in
   consistency_distill.py, with the PREVIOUS call's x0 estimate renoised to
   the next grid point before the next call (no inner ODE loop between
   calls). This is what lets ONE student, trained once against a
@@ -39,8 +39,15 @@ from src.l35.consistency_distill import (
     coord_x0_estimate,
     lattice_ddim_step,
     lattice_forward_noise,
-    lattice_x0_estimate,
+    lattice_x0_estimate_bounded,
 )
+
+# Empirical std of real MP-20 lattice matrix entries (n=100 structures via
+# diffcsp's own process_one() + lattice_params_to_matrix_torch), the EDM-
+# style sigma_data calibration lattice_x0_estimate_bounded needs. Measured,
+# not assumed -- same convention EDM itself uses (sigma_data = std of the
+# data the network is being asked to reconstruct).
+LATTICE_SIGMA_DATA = 3.33
 from src.l35.training_step import _decoder_step
 
 
@@ -108,18 +115,41 @@ def consistency_sampling_grid(num_steps, max_timestep):
 
 def multistep_consistency_sample(
     decoder, atom_types, num_atoms, node2graph, num_steps, beta_scheduler, sigma_scheduler,
-    max_timestep, generator=None,
+    max_timestep, generator=None, sigma_data_l=LATTICE_SIGMA_DATA,
 ):
     """Genuine consistency sampling (Song et al. 2023 Algorithm 1): one
     direct decoder call per NFE, each producing an x0 estimate straight
-    from the boundary-condition formulas (lattice_x0_estimate /
-    coord_x0_estimate), with the previous call's x0 estimate renoised to
-    the next grid point before the next call -- no inner ODE/solver loop
-    between calls (contrast few_step_sample, which runs num_steps small
-    DDIM/PF-ODE solver steps). A student trained as a consistency function
-    can be sampled this way at any num_steps without retraining; the
-    boundary formulas being independent of num_steps is exactly what makes
-    that possible.
+    from the boundary-condition formulas, with the previous call's x0
+    estimate renoised to the next grid point before the next call -- no
+    inner ODE/solver loop between calls (contrast few_step_sample, which
+    runs num_steps small DDIM/PF-ODE solver steps). A student trained as a
+    consistency function can be sampled this way at any num_steps without
+    retraining; the boundary formulas being independent of num_steps is
+    exactly what makes that possible.
+
+    Uses lattice_x0_estimate_bounded (the EDM/Consistency-Models-style
+    c_skip/c_out blend), NOT the naive lattice_x0_estimate -- the naive
+    formula's pred_eps coefficient sqrt(1-ac_t)/sqrt(ac_t) is unbounded as
+    ac_t -> 0 (~642x at DiffCSP's real ac[999]=2.428e-6), confirmed to
+    produce geometrically invalid structures (collapsed/negative-
+    determinant lattices) regardless of network quality -- an untrained
+    teacher fails identically to a trained student under the naive
+    formula, and a direct overfit test shows the consistency-distillation
+    loss doesn't even converge when regressing against ground truth at
+    that ac_t. See consistency_distill.py's lattice_c_skip/lattice_c_out
+    docstrings for the full derivation.
+
+    coord_x0_estimate (unchanged) has its OWN, separate, and still-open
+    issue: its coefficient (sigma_t**2, bounded, unlike the lattice's) is
+    NOT the problem -- confirmed directly, it stays under ~0.2 across the
+    whole schedule -- but the network's raw output on renoised, off-
+    manifold inputs (never seen in training, which only ever regresses
+    against real ground truth) grows far outside its real in-distribution
+    range (measured: real scale spans ~0.001 at t=999 to ~475 at t=1; a
+    naive fixed clamp tested during debugging discarded the network's
+    actual output at 100% of steps past the first two, a degenerate non-
+    fix, not included here). Coordinate collapse under this sampler is
+    real and NOT resolved by the lattice fix alone.
     """
     device = num_atoms.device
     batch_size = num_atoms.shape[0]
@@ -152,7 +182,7 @@ def multistep_consistency_sample(
             pred_eps, score = _decoder_step(
                 decoder, l_t, x_t, atom_types, num_atoms, node2graph, t, sigma_t, sigma_norm_t
             )
-            l0_hat = lattice_x0_estimate(l_t, pred_eps, ac_t)
+            l0_hat = lattice_x0_estimate_bounded(l_t, pred_eps, ac_t, sigma_data_l)
             x0_hat = coord_x0_estimate(x_t, score, sigma_t_per_atom)
 
     return x0_hat, l0_hat
