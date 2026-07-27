@@ -2,62 +2,71 @@
 
 **Pre-registered protocol.** Locked 2026-07-26, before any run.
 
-## STATUS (2026-07-27): code complete, GPU run BLOCKED — not yet executed
+## STATUS (2026-07-27): run complete — AMBIGUOUS, does not confirm generalization
 
-Everything below this line was written and locked BEFORE any run, per this
-project's usual discipline. As of 2026-07-27, implementation is done and
-tested, but **no GPU run has happened yet** — AWS credentials for the EC2
-instance (`i-0659e54e8adc759d3`, see memory `l35-ec2-remote-host-reference`
-for the tunnel/SSH details) expired mid-session (`aws sts get-caller-
-identity` / `describe-instances` both fail with `AuthFailure`). The user
-chose to skip the GPU run for now rather than walk through re-auth live.
+AWS credentials for the EC2 instance expired mid-session and were never
+refreshed. Rather than wait, the run was done **locally on Apple Silicon
+(M3 Pro) via PyTorch MPS** instead of CUDA — `l42_run_repro.py` and
+`l43_run_repro.py` were patched to prefer `mps` when `cuda` isn't available
+(one-line change, no other CUDA-specific code existed in either script).
+Sanity check: rerunning L42 on MPS reproduced its EC2/A10G result exactly
+(identical point estimates and CIs at every alpha), confirming MPS is a
+valid substitute for this workload, not just "fast but wrong."
 
-**What's done and verified (all local, no GPU needed):**
-- `src/l38/l43_solubility_steering.py` — GRAVY (Kyte & Doolittle 1982)
-  solubility proxy, `solubility_proxy_excluding()` for the leucine-exclusion-
-  style robustness check. Sanity-checked against real ubiquitin (soluble,
-  GRAVY < 0) and homopolymer extremes.
-- `tests/l38/test_l43_solubility_steering.py` — 9 tests, all passing.
-- `src/l38/l43_run_repro.py` — full run script, structurally identical to
-  L42's (same model, same hook class, same degeneracy filter, same paired-
-  bootstrap verdict logic), pointed at a new dataset and scorer. Compiles
-  clean; not yet run end-to-end (needs GPU).
-- Real dataset already downloaded and length-filtered: `src/l38/data_cache/
-  solubility/{train,test}.csv` (`hazemessam/solubility`, HuggingFace, same
-  author/format convention as L42's meltome dataset) — 49,583 usable
-  (length<=400) sequences, 28,522 insoluble / 21,061 soluble by real
-  experimental label, confirmed via direct pandas inspection.
-- Full local test suite (92 tests, everything except the 3 torch-dependent
-  files this sandbox can't import) passes.
+**Result: AMBIGUOUS, per this doc's own pre-registered rule.** Full run
+output: `src/l38/l43_repro_out/results.json`.
 
-**What's NOT done:**
-- The actual GPU run (`python -m src.l38.l43_run_repro` on the EC2 A10G,
-  inside `.venv-l38`) has never been executed. `src/l38/l43_repro_out/`
-  does not exist yet.
-- No results, no verdict, no PASS/KILL/AMBIGUOUS call — this doc's rule
-  below is unapplied.
+| alpha | real vs random diff | 95% CI | significant |
+|-------|---------------------|--------|--------------|
+| 0.1   | -0.0013 | [-0.0107, 0.0080] | no |
+| 0.25  | +0.0136 | [-0.0030, 0.0297] | no |
+| 0.5   | +0.0098 | [-0.0152, 0.0332] | no |
+| 1.0   | -0.0263 | [-0.0727, 0.0199] | no |
+| 2.0   | -0.0960 | [-0.1629, -0.0279] | **yes** |
 
-**Next agent / next session: to resume,**
-1. Refresh AWS credentials (`aws sso login` or whatever this account's flow
-   is — check with the user first, this session did not attempt it after
-   the user chose to defer).
-2. Reconnect via the EC2 Instance Connect Endpoint tunnel (see memory
-   `l35-ec2-remote-host-reference` for the exact commands: tunnel to
-   `eice-0695d0c190091d2a0`, then `ssh -p <PORT> -i ~/.ssh/biostat-l35-key
-   ubuntu@localhost`).
-3. `scp` `src/l38/l43_run_repro.py`, `src/l38/l43_solubility_steering.py`,
-   `tests/l38/test_l43_solubility_steering.py`, and the `data_cache/
-   solubility/` CSVs to `~/biostat/src/l38/...` (data_cache is gitignored/
-   not synced automatically — verify it's present or re-download the same
-   HuggingFace URLs used locally: `https://huggingface.co/datasets/
-   hazemessam/solubility/resolve/main/{train,test}.csv`).
-4. Run `.venv-l38/bin/python -m pytest tests/l38/test_l43_solubility_steering.py
-   -q` remotely first (sanity check), then `.venv-l38/bin/python -m
-   src.l38.l43_run_repro`.
-5. Apply the PASS/KILL/AMBIGUOUS rule below to whatever `l43_repro_out/
-   results.json` says — do not skip the residue-exclusion robustness check
-   if a significant effect appears, per the AMBIGUOUS clause (this is
-   exactly the check that caught L42's false positive).
+Unlike L42's clean monotonic dose-response (effect grew smoothly and
+consistently with alpha: +0.007 → +0.022 → +0.050), L43's effect **flips
+sign incoherently across alphas** with no trend, and the one alpha that
+clears significance (2.0) is also the **wrong sign** — steering with the
+"toward soluble" vector made sequences score as LESS soluble than the
+random control, not more.
+
+**The residue-exclusion robustness check (this protocol's own AMBIGUOUS
+clause) confirms this is an artifact, not a real effect.** Substitution
+analysis at alpha=2.0 showed the dominant compositional shift is toward
+alanine and glycine (A: 776 substitutions-to, G: 711 — the two most common
+targets by a wide margin). Rescoring with A/G excluded from the GRAVY
+calculation **collapses the alpha=2.0 effect from -0.096 (significant) to
+-0.0095 (not significant)** — the entire "effect" is explained by a
+compositional shift toward two small, chemically mild residues under heavy
+steering, not a genuine solubility-relevant shift. This is the same
+category of artifact as L42's leucine collapse, just with different
+residues and (this time) correctly caught before being reported as a win.
+
+**Per the pre-registered rule: this is AMBIGUOUS, not PASS.** The automated
+verdict in `results.json` says `"decision": "PASS"` because the script's
+verdict logic (copied from L42) only checks "does any alpha clear
+significance," and does not itself run the residue-exclusion check — that
+check has to be applied manually per this doc's own AMBIGUOUS clause, and
+was applied here. **Do not trust the automated `"decision"` field in
+`l43_repro_out/results.json` at face value** — this is exactly the failure
+mode the AMBIGUOUS clause exists to catch, and it worked.
+
+**Conclusion: L42's reproduction does NOT straightforwardly generalize to
+solubility with this exact recipe.** This does not mean solubility can't be
+steered — it means the difference-of-means vector, generation setup, and
+scoring proxy that worked for thermostability produce an artifact-dominated
+result for solubility at the alpha range where the effect would need to be
+large enough to detect. Two live possibilities, neither tested yet: (a) the
+low end (0.25–0.5) has a small, inconsistent hint (63% of sequences move
+positive at 0.25, mean diff +0.014, not significant) that might resolve
+with a larger eval set rather than the current n=60; (b) GRAVY specifically
+may be a poor proxy for how ESM2's solubility-associated activations
+actually organize residue composition — unlike IVYWREL (which was verified
+by checking real thermophile/mesophile literature before trusting it), the
+GRAVY-based split here was not independently checked against what
+alanine/glycine enrichment actually means for aqueous solubility in the
+literature before this run.
 
 ## Why this exists
 
