@@ -1,0 +1,72 @@
+{
+  "base": {
+    "accuracy": 0.9812417103517969,
+    "f1": 0.9773091909236764,
+    "auc": 0.9970220129254825,
+    "n_train": 63332,
+    "n_test": 15833,
+    "accuracy_ci": {
+      "point_estimate": 0.9812417103517969,
+      "ci_lower": 0.9790942967220363,
+      "ci_upper": 0.9833259647571528,
+      "bootstrap_std": 0.0010815135103830705
+    },
+    "f1_ci": {
+      "point_estimate": 0.9773091909236764,
+      "ci_lower": 0.9746594551381449,
+      "ci_upper": 0.9798720114131776,
+      "bootstrap_std": 0.0013208850861803384
+    },
+    "auc_ci": {
+      "point_estimate": 0.9970220129254825,
+      "ci_lower": 0.9962604385178874,
+      "ci_upper": 0.9977112652599677,
+      "bootstrap_std": 0.00037059028831602846
+    }
+  },
+  "finetuned": {
+    "accuracy": 0.9831364870839386,
+    "f1": 0.9796229871021903,
+    "auc": 0.9973993602927309,
+    "n_train": 63332,
+    "n_test": 15833,
+    "accuracy_ci": {
+      "point_estimate": 0.9831364870839386,
+      "ci_lower": 0.9811153919029875,
+      "ci_upper": 0.9850944230404851,
+      "bootstrap_std": 0.0010224710115767112
+    },
+    "f1_ci": {
+      "point_estimate": 0.9796229871021903,
+      "ci_lower": 0.9771328571856518,
+      "ci_upper": 0.9820130118637581,
+      "bootstrap_std": 0.0012482428163326565
+    },
+    "auc_ci": {
+      "point_estimate": 0.9973993602927309,
+      "ci_lower": 0.9966921573338808,
+      "ci_upper": 0.9980314142338972,
+      "bootstrap_std": 0.0003428340020601403
+    }
+  },
+  "paired_diff": {
+    "accuracy": {
+      "point_estimate_diff": 0.0018947767321417786,
+      "ci_lower": 0.0006315922440471855,
+      "ci_upper": 0.003221120444640957,
+      "significant_at_95pct": true
+    },
+    "f1": {
+      "point_estimate_diff": 0.002313796178513905,
+      "ci_lower": 0.000761776044208834,
+      "ci_upper": 0.003920694531859786,
+      "significant_at_95pct": true
+    },
+    "auc": {
+      "point_estimate_diff": 0.0003773473672483707,
+      "ci_lower": 0.00014469333471625324,
+      "ci_upper": 0.0005989439487398412,
+      "significant_at_95pct": true
+    }
+  }
+}

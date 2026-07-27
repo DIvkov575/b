@@ -1,0 +1,25 @@
+{
+  "model": "facebook/esm2_t33_650M_UR50D",
+  "n_params": 652356534,
+  "base_loss": 1.9650764644469148,
+  "base_ppl": 7.135457992553711,
+  "final_loss": 1.2874112048382458,
+  "final_ppl": 3.623394250869751,
+  "ppl_improvement_pct": 49.21987832244285,
+  "n_train": 69722,
+  "n_eval": 3669,
+  "n_epochs_completed": 3,
+  "n_epochs_planned": 3,
+  "eval_loss_by_epoch": [
+    1.5573593756995363,
+    1.3876780647557994,
+    1.2874112048382458
+  ],
+  "stopped_early": false,
+  "batch_size": 2,
+  "grad_accum_steps": 8,
+  "effective_batch_size": 16,
+  "lr": 1e-05,
+  "max_length": 700,
+  "bf16": true
+}

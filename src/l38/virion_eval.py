@@ -44,7 +44,10 @@ def load_labeled_dataset() -> Tuple[List[str], np.ndarray]:
 
 
 @torch.no_grad()
-def embed_sequences(sequences: List[str], model_path: str, device: str) -> np.ndarray:
+def embed_sequences(
+    sequences: List[str], model_path: str, device: str,
+    max_length: int = MAX_LENGTH, batch_size: int = EMBED_BATCH_SIZE,
+) -> np.ndarray:
     """Mean-pooled last-hidden-state embedding per sequence, from a FROZEN
     encoder (base or fine-tuned MLM backbone -- the encoder body is shared
     between AutoModelForMaskedLM and AutoModel for ESM-2, so this loads
@@ -53,10 +56,10 @@ def embed_sequences(sequences: List[str], model_path: str, device: str) -> np.nd
     model = AutoModel.from_pretrained(model_path).to(device).eval()
 
     embeddings = []
-    for i in range(0, len(sequences), EMBED_BATCH_SIZE):
-        batch = sequences[i : i + EMBED_BATCH_SIZE]
+    for i in range(0, len(sequences), batch_size):
+        batch = sequences[i : i + batch_size]
         enc = tokenizer(
-            batch, truncation=True, max_length=MAX_LENGTH, padding=True, return_tensors="pt"
+            batch, truncation=True, max_length=max_length, padding=True, return_tensors="pt"
         ).to(device)
         out = model(**enc)
         mask = enc["attention_mask"].unsqueeze(-1).float()
@@ -153,17 +156,25 @@ def paired_bootstrap_metric_diff(
     }
 
 
-def run_comparison(base_model_path: str, finetuned_model_path: str, device: str) -> dict:
-    sequences, labels = load_labeled_dataset()
-    print(f"loaded {len(sequences)} sequences ({labels.sum()} virion, {len(labels)-labels.sum()} non-virion)", flush=True)
+def run_comparison(
+    base_model_path: str, finetuned_model_path: str, device: str,
+    load_data_fn=load_labeled_dataset, max_length: int = MAX_LENGTH, embed_batch_size: int = EMBED_BATCH_SIZE,
+) -> dict:
+    """load_data_fn must return (sequences, labels) -- defaults to the
+    original UniProt-keyword dataset; pass a different loader (e.g.
+    src.l38.phavip_real_data.load_pvp_labeled_dataset) to reuse this same
+    bootstrap-tested comparison machinery on a different labeled dataset."""
+    sequences, labels = load_data_fn()
+    labels = np.asarray(labels)
+    print(f"loaded {len(sequences)} sequences ({labels.sum()} positive, {len(labels)-labels.sum()} negative)", flush=True)
 
     print(f"embedding with base model: {base_model_path}", flush=True)
-    base_embeddings = embed_sequences(sequences, base_model_path, device)
+    base_embeddings = embed_sequences(sequences, base_model_path, device, max_length=max_length, batch_size=embed_batch_size)
     base_results = evaluate_probe(base_embeddings, labels)
     print(f"base results: {base_results}", flush=True)
 
     print(f"embedding with fine-tuned model: {finetuned_model_path}", flush=True)
-    ft_embeddings = embed_sequences(sequences, finetuned_model_path, device)
+    ft_embeddings = embed_sequences(sequences, finetuned_model_path, device, max_length=max_length, batch_size=embed_batch_size)
     ft_results = evaluate_probe(ft_embeddings, labels)
     print(f"fine-tuned results: {ft_results}", flush=True)
 
