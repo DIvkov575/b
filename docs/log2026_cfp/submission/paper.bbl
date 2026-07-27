@@ -1,0 +1,46 @@
+\begin{thebibliography}{6}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Jiao et~al.(2023)Jiao, Huang, Lin, Han, Chen, Lu, and
+  Liu]{Jiao:2023diffcsp}
+Rui Jiao, Wenbing Huang, Peijia Lin, Jiaqi Han, Pin Chen, Yutong Lu, and Yang
+  Liu.
+\newblock {Crystal Structure Prediction by Joint Equivariant Diffusion}.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem[Song et~al.(2023)Song, Dhariwal, Chen, and Sutskever]{Song:2023cm}
+Yang Song, Prafulla Dhariwal, Mark Chen, and Ilya Sutskever.
+\newblock {Consistency Models}.
+\newblock In \emph{ICML}, 2023.
+
+\bibitem[Karras et~al.(2022)Karras, Aittala, Aila, and Laine]{Karras:2022edm}
+Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine.
+\newblock {Elucidating the Design Space of Diffusion-Based Generative Models}.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem[Xie et~al.(2022)Xie, Fu, Ganea, Barzilay, and Jaakkola]{Xie:2022cdvae}
+Tian Xie, Xiang Fu, Octavian-Eugen Ganea, Regina Barzilay, and Tommi Jaakkola.
+\newblock {Crystal Diffusion Variational Autoencoder for Periodic Material
+  Generation}.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem[Jain et~al.(2013)Jain, Ong, Hautier, Chen, Richards, Dacek, Cholia,
+  Gunter, Skinner, Ceder, and Persson]{Jain:2013mp}
+Anubhav Jain, Shyue~Ping Ong, Geoffroy Hautier, Wei Chen, William~Davidson
+  Richards, Stephen Dacek, Shreyas Cholia, Dan Gunter, David Skinner, Gerbrand
+  Ceder, and Kristin~A. Persson.
+\newblock {Commentary: The Materials Project: A Materials Genome Approach to
+  Accelerating Materials Innovation}.
+\newblock \emph{APL Materials}, 1\penalty0 (1), 2013.
+
+\bibitem[Luo et~al.(2023)Luo, Tan, Huang, Li, and Zhao]{Luo:2023lcm}
+Simian Luo, Yiqin Tan, Longbo Huang, Jian Li, and Hang Zhao.
+\newblock {Latent Consistency Models: Synthesizing High-Resolution Images with
+  Few-Step Inference}.
+\newblock \emph{arXiv preprint arXiv:2310.04378}, 2023.
+
+\end{thebibliography}
