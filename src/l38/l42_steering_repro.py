@@ -183,6 +183,37 @@ def paired_bootstrap_mean_diff(scores_a: np.ndarray, scores_b: np.ndarray, n_boo
     }
 
 
+def layer_effects_sign_test(effects: List[float]) -> dict:
+    """Binomial sign test: are per-layer effect sizes skewed positive (or
+    negative) far more often than the 50/50 chance would predict, treating
+    each layer as one independent trial? Used to distinguish "a handful of
+    layers cleared a 95% CI by multiple-comparisons luck" (expected count
+    at p=0.05 across N layers is 0.05*N) from "the effect is real but
+    small and spread across most layers" -- a small per-layer bootstrap CI
+    can fail to exclude zero even when the DIRECTION is consistently real,
+    so this checks direction independent of any single-layer significance
+    threshold. Requires scipy (only pure-math dependency beyond numpy in
+    this module, since scipy.stats has no reasonable from-scratch
+    reimplementation worth maintaining here).
+    """
+    from scipy import stats
+
+    if len(effects) == 0:
+        raise ValueError("layer_effects_sign_test requires at least one effect")
+    effects_arr = np.asarray(effects, dtype=float)
+    n_positive = int((effects_arr > 0).sum())
+    n_negative = int((effects_arr < 0).sum())
+    n_total = len(effects_arr)
+    p_value = stats.binomtest(n_positive, n_total, 0.5).pvalue
+    return {
+        "n_positive": n_positive,
+        "n_negative": n_negative,
+        "n_total": n_total,
+        "p_value": float(p_value),
+        "skewed_positive_at_95pct": bool(p_value < 0.05 and n_positive > n_negative),
+    }
+
+
 def dose_response_is_monotonic_then_collapsing(alphas: List[float], effects: List[float], collapse_tolerance: float = 0.0) -> bool:
     """Check for the qualitative dose-response shape Huang et al. report:
     effect increases with alpha up to some point, then may collapse

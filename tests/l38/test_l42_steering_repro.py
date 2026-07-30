@@ -6,6 +6,7 @@ from src.l38.l42_steering_repro import (
     dose_response_is_monotonic_then_collapsing,
     is_degenerate_sequence,
     ivywrel_fraction,
+    layer_effects_sign_test,
     paired_bootstrap_mean_diff,
     renormalize_to_original_norm,
     split_by_percentile,
@@ -176,3 +177,32 @@ def test_ivywrel_fraction_respects_custom_residue_set():
 def test_ivywrel_fraction_rejects_empty_sequence():
     with pytest.raises(ValueError):
         ivywrel_fraction("")
+
+
+def test_layer_effects_sign_test_detects_real_skew():
+    # 30 positive, 3 negative -- the actual L45 layer-sweep counts.
+    effects = [0.001] * 30 + [-0.001] * 3
+    result = layer_effects_sign_test(effects)
+    assert result["n_positive"] == 30
+    assert result["n_negative"] == 3
+    assert result["p_value"] < 0.001
+    assert result["skewed_positive_at_95pct"] is True
+
+
+def test_layer_effects_sign_test_rejects_pure_noise():
+    # 17 positive, 16 negative out of 33 -- statistically indistinguishable
+    # from a fair coin, should NOT be flagged as skewed.
+    effects = [0.001] * 17 + [-0.001] * 16
+    result = layer_effects_sign_test(effects)
+    assert result["skewed_positive_at_95pct"] is False
+
+
+def test_layer_effects_sign_test_rejects_empty_input():
+    with pytest.raises(ValueError):
+        layer_effects_sign_test([])
+
+
+def test_layer_effects_sign_test_handles_all_positive():
+    result = layer_effects_sign_test([0.001] * 10)
+    assert result["n_negative"] == 0
+    assert result["skewed_positive_at_95pct"] is True
