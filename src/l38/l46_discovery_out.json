@@ -1,0 +1,143 @@
+{
+  "layer": 24,
+  "n_sequences": 100,
+  "n_dead_features": 15,
+  "n_total_features": 10240,
+  "top_features": [
+    {
+      "feature_id": 877,
+      "max_activation": 1.2984288930892944,
+      "firing_fraction": 0.06334445371142619,
+      "mean_activation_when_active": 0.10086651791164246,
+      "selectivity_score": 1.2161806241734212,
+      "strongest_firing_residue": "E",
+      "strongest_firing_context": "CCDAD[E]LNNKG"
+    },
+    {
+      "feature_id": 6402,
+      "max_activation": 1.1620317697525024,
+      "firing_fraction": 0.018557130942452045,
+      "mean_activation_when_active": 0.27974864390124093,
+      "selectivity_score": 1.140467794041916,
+      "strongest_firing_residue": "L",
+      "strongest_firing_context": "SLQNY[L]NLTPT"
+    },
+    {
+      "feature_id": 5491,
+      "max_activation": 1.1594667434692383,
+      "firing_fraction": 0.03561301084236864,
+      "mean_activation_when_active": 0.07286296718981798,
+      "selectivity_score": 1.1181746417627023,
+      "strongest_firing_residue": "K",
+      "strongest_firing_context": "QVVID[K]GSVNG"
+    },
+    {
+      "feature_id": 9216,
+      "max_activation": 1.136715054512024,
+      "firing_fraction": 0.017764804003336115,
+      "mean_activation_when_active": 0.2645299924994456,
+      "selectivity_score": 1.1165215343609762,
+      "strongest_firing_residue": "G",
+      "strongest_firing_context": "RVIAA[G]NGCTD"
+    },
+    {
+      "feature_id": 1023,
+      "max_activation": 1.1351910829544067,
+      "firing_fraction": 0.02648040033361134,
+      "mean_activation_when_active": 0.21180100558494314,
+      "selectivity_score": 1.1051307686226284,
+      "strongest_firing_residue": "G",
+      "strongest_firing_context": "DVRVI[G]PDGGS"
+    },
+    {
+      "feature_id": 7415,
+      "max_activation": 1.0858335494995117,
+      "firing_fraction": 0.0047956630525437865,
+      "mean_activation_when_active": 0.6075903495206781,
+      "selectivity_score": 1.0806262576649646,
+      "strongest_firing_residue": "L",
+      "strongest_firing_context": "ELSEP[L]EQKGR"
+    },
+    {
+      "feature_id": 4488,
+      "max_activation": 1.113654375076294,
+      "firing_fraction": 0.033402835696413676,
+      "mean_activation_when_active": 0.06756599417703922,
+      "selectivity_score": 1.0764551609630282,
+      "strongest_firing_residue": "V",
+      "strongest_firing_context": "MGIRE[V]IKTAD"
+    },
+    {
+      "feature_id": 567,
+      "max_activation": 1.0761626958847046,
+      "firing_fraction": 0.025938281901584655,
+      "mean_activation_when_active": 0.1982766826729922,
+      "selectivity_score": 1.0482488845068778,
+      "strongest_firing_residue": "G",
+      "strongest_firing_context": "GIEFQ[G]ASLDE"
+    },
+    {
+      "feature_id": 2983,
+      "max_activation": 1.0341402292251587,
+      "firing_fraction": 0.014970809007506256,
+      "mean_activation_when_active": 0.31478245720357445,
+      "selectivity_score": 1.0186583133664502,
+      "strongest_firing_residue": "H",
+      "strongest_firing_context": "QIVSG[H]SSEDK"
+    },
+    {
+      "feature_id": 4094,
+      "max_activation": 1.063143014907837,
+      "firing_fraction": 0.04787322768974145,
+      "mean_activation_when_active": 0.07611093629161318,
+      "selectivity_score": 1.0122469272883958,
+      "strongest_firing_residue": "T",
+      "strongest_firing_context": "RGRPM[T]KNLDP"
+    },
+    {
+      "feature_id": 4628,
+      "max_activation": 1.0268280506134033,
+      "firing_fraction": 0.019307756463719766,
+      "mean_activation_when_active": 0.061869861868855826,
+      "selectivity_score": 1.0070023046820435,
+      "strongest_firing_residue": "V",
+      "strongest_firing_context": "AVVSS[V]KLDTQ"
+    },
+    {
+      "feature_id": 681,
+      "max_activation": 1.024397850036621,
+      "firing_fraction": 0.019849874895746456,
+      "mean_activation_when_active": 0.11499476086489167,
+      "selectivity_score": 1.0040636808699226,
+      "strongest_firing_residue": "T",
+      "strongest_firing_context": "LMDEL[T]GDLKA"
+    },
+    {
+      "feature_id": 9730,
+      "max_activation": 1.016686201095581,
+      "firing_fraction": 0.01622185154295246,
+      "mean_activation_when_active": 0.14142612780379682,
+      "selectivity_score": 1.0001936684756403,
+      "strongest_firing_residue": "V",
+      "strongest_firing_context": "DADPW[V]LGGVV"
+    },
+    {
+      "feature_id": 4412,
+      "max_activation": 1.0123991966247559,
+      "firing_fraction": 0.01359466221851543,
+      "mean_activation_when_active": 0.12063579553019747,
+      "selectivity_score": 0.9986359715163459,
+      "strongest_firing_residue": "R",
+      "strongest_firing_context": "PDPLE[R]WSEGN"
+    },
+    {
+      "feature_id": 6640,
+      "max_activation": 1.0085734128952026,
+      "firing_fraction": 0.013761467889908258,
+      "mean_activation_when_active": 0.07258220757357776,
+      "selectivity_score": 0.9946939622590301,
+      "strongest_firing_residue": "G",
+      "strongest_firing_context": "RVVKP[G]GWVIT"
+    }
+  ]
+}
