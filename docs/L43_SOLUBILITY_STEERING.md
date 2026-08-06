@@ -156,3 +156,63 @@ successful PASS here means "the L42 harness generalizes to a second
 property," which is valuable for deciding whether to trust this pipeline on
 a genuinely novel target, not a publishable solubility-design result by
 itself.
+
+## Follow-up (2026-08-03): larger eval set + GRAVY proxy quality check
+
+Two open leads from the original run: (a) the low-alpha hint (63% of
+sequences moved positive at alpha=0.25, mean diff +0.014, not significant
+at n=60) might resolve with more statistical power; (b) GRAVY was never
+checked against real solubility labels before use, unlike IVYWREL (checked
+against thermophile/mesophile literature in L42).
+
+**(a) Larger eval set (n=60 → n≈287-288 non-degenerate pairs, 5x):**
+`src/l38/l43_run_repro_v2_largeeval.py`, alphas restricted to [0.1, 0.25,
+0.5] (the established non-collapsing range). Result: **still not
+significant at any alpha.**
+
+| alpha | real vs random diff | 95% CI | significant | % sequences real > random |
+|-------|---------------------|--------|--------------|---------------------------|
+| 0.1   | +0.0022 | [-0.0019, 0.0062] | no | 45.1% |
+| 0.25  | +0.0059 | [-0.0012, 0.0130] | no | 53.0% |
+| 0.5   | -0.0009 | [-0.0118, 0.0100] | no | 49.1% |
+
+The low-alpha hint does NOT resolve with 5x the sample — if anything, the
+point estimate at alpha=0.25 stayed the same order of magnitude
+(+0.006 vs. the original +0.014) while the CI tightened enough to rule out
+anything but a very small effect. No dose-response pattern (0.1 < 0.25 but
+0.5 drops below both). At n≈288 this is a well-powered null, not an
+underpowered one — the original "might resolve with more data" hypothesis
+is now closed.
+
+**(b) GRAVY proxy quality, checked directly against real labels (not
+assumed):** computed GRAVY for all 62,478 sequences in the training set and
+compared against the real soluble/insoluble labels.
+
+| | soluble (n=26,075) | insoluble (n=36,403) |
+|---|---|---|
+| mean GRAVY | -0.342 | -0.325 |
+
+Mann-Whitney U p=1.9e-11 (real, given the large n) but point-biserial
+correlation **r=-0.030** — the direction is correct (soluble sequences
+really do skew slightly more hydrophilic, matching Kyte-Doolittle's
+intended use) but the effect size is negligible. GRAVY explains under 0.1%
+of the variance in this dataset's solubility label. **This resolves lead
+(b): GRAVY is a statistically real but practically very weak proxy for
+solubility in this dataset** — a plausible reason a real underlying
+steering effect (if one exists) would be undetectable through this
+particular scoring function, independent of whether the steering itself
+works.
+
+## Revised conclusion
+
+Both open leads are now closed, not just left open. The harness does not
+generalize to solubility with GRAVY as the proxy, and this is no longer
+attributable to insufficient sample size (a) or an untested-but-plausible
+proxy concern (b) — it's a proxy-quality ceiling: GRAVY's real correlation
+with solubility in this dataset (r=-0.03) is simply too weak to detect
+through a steering-vs-random-control comparison at any sample size this
+project would practically run. A genuine next attempt at solubility
+steering would need either a better proxy (e.g. a frozen-embedding
+classifier probe trained on a disjoint split, mirroring L39's/L41's Gate 3
+methodology, rather than a fixed literature formula) or an experimentally
+stronger dataset where the solubility signal is compositionally larger.

@@ -99,3 +99,44 @@ L48's full 770-position, proper-paired-bootstrap significance test on
 whichever heads this coarse sweep flagged as most extreme (the top ~5 by
 magnitude in either direction), rather than trusting the coarse ranking's
 exact order at face value.
+
+## Follow-up (2026-08-03): full-power test on the top-5 — 2/5 confirmed real, 3/5 were noise
+
+Ran `src/l38/l49_full_power_top5_test.py`: L48's full 770-position (not
+104), proper paired-bootstrap significance test, applied individually to
+all 5 heads that tied at mean_effect=-0.0385 in the coarse n=104 sweep
+(layers 12/11, 14/15, 15/8, 18/3, 24/9).
+
+| head | ablated acc | diff vs baseline (0.4753) | 95% CI | significant |
+|---|---|---|---|---|
+| 12/11 | 0.4571 | −0.0182 | [−0.0325, −0.0052] | **yes** |
+| 14/15 | 0.4662 | −0.0091 | [−0.0234, 0.0052] | no |
+| 15/8 | 0.4649 | −0.0104 | [−0.0234, 0.0026] | no |
+| 18/3 | 0.4338 | −0.0416 | [−0.0623, −0.0208] | **yes** |
+| 24/9 | 0.4623 | −0.0130 | [−0.0338, 0.0091] | no |
+
+**Only 2 of the 5 heads that tied at the coarse sweep's top rank turn out to
+have a statistically real individual causal effect at full power — the
+other 3 were noise that happened to tie exactly at n=104.** This confirms
+the coarse sweep's own stated limitation (low power at n=104, "a real
+effect... could exist and not be detected," but the converse risk —
+apparent top effects that are actually noise — was equally real and is now
+resolved). Layer 18/head 3 has by far the largest, most robust effect
+(−0.0416, more than double the next-largest), a genuinely new causally-
+confirmed head this project hadn't previously flagged. Layer 12/head 11 is
+smaller but real. Neither appeared in Stage 1's correlational top-30
+(checked directly against `l48_replication_out.json`'s enrichment matrix:
+enrichment ratios 1.4–2.1x, well below the 2.79x cutoff for that list) —
+consistent with L49's original headline finding that causal importance and
+attention-correlation rank are only weakly related, now on a properly
+power-checked pair of heads rather than a coarse tie.
+
+**Practical lesson for this project's future coarse-then-confirm sweeps:**
+a tie at the coarse-pass extreme is not itself evidence of a shared
+mechanism — it's exactly the noise floor a low-n pass will produce for
+several heads simultaneously. The confirm step isn't optional bookkeeping;
+here it changed the actionable conclusion from "5 candidate heads" to "2
+confirmed, 1 of which — 18/3 — is clearly the strongest hit in this whole
+arc's causal-head search, correlational or otherwise."
+
+Full numbers: `src/l38/l49_full_power_top5_out.json`.

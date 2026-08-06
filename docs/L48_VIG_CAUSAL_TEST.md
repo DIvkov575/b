@@ -99,3 +99,56 @@ structural attention causally at all — this test cannot distinguish those
 two explanations, and a full ablation of ALL contact-enriched heads
 simultaneously (not tested here) would be the natural next check if this
 result needed to be pushed further.
+
+## Follow-up (2026-08-03): the redundancy hypothesis, tested directly — CONFIRMED
+
+Built `src/l38/l48_multihead_redundancy_ablation.py`: ablate the top-30
+contact-enriched heads (by Stage 1's enrichment ranking, 12.9x down to
+2.79x) SIMULTANEOUSLY, and compare against ablating a size-matched random
+control (30 heads chosen uniformly from the other 450) — both on the exact
+same 770 real residues (603 contact-bearing, 167 non-contact) from the same
+8 PDB structures, using the same paired-bootstrap significance test as
+every other causal check in this project.
+
+**Result: ablating 30 heads at once produces a real, large effect — and the
+contact-enriched set matters significantly more than an equally-sized
+random set.**
+
+| comparison | contact positions (n=603) | non-contact positions (n=167) |
+|---|---|---|
+| top-30 ablated vs. baseline | −0.2073 [−0.2488, −0.1675] **sig** | −0.1796 [−0.2575, −0.1078] **sig** |
+| random-30 ablated vs. baseline | −0.0912 [−0.1260, −0.0580] **sig** | −0.0599 [−0.1257, 0.0000] not sig |
+| top-30 vs. random-30 ablation | −0.1161 [−0.1542, −0.0779] **sig** | −0.1198 [−0.1856, −0.0539] **sig** |
+
+Baseline accuracy drops from 49.1% to 28.4% at contact positions when the
+top-30 heads are removed — a massive, clearly significant effect, vs. a
+smaller (but still real) drop to 40.0% when 30 arbitrary heads are removed.
+The top-30 set hurts accuracy roughly 2.3x more than the random-30 control,
+and this "top beats random" comparison is itself significant at both
+contact AND non-contact positions.
+
+**This resolves the ambiguity L48's single-head test left open: redundancy,
+not irrelevance, explains L48's original null.** Removing any ONE
+contact-enriched head (Stage 2, above) is invisible because ~29 other
+correlated heads compensate; removing 30 of them at once exhausts that
+redundancy and the causal importance becomes clearly visible. The
+attention-correlation signal Vig et al. found IS tracking something
+causally real in aggregate — it was L48's single-head test design, not the
+underlying phenomenon, that produced the null.
+
+**Important, more nuanced correction to L49's conclusion:** L49 (all-480-
+head sweep) found Vig's #1 pick ranks only 313th of 480 by SINGLE-head
+causal effect, and concluded correlational and causal rankings are
+"inverted." This follow-up shows that conclusion needs qualification: a
+head can be simultaneously (a) causally negligible ON ITS OWN (L48/L49's
+single-head finding, still true) and (b) part of a causally load-bearing
+GROUP when considered jointly with its correlated peers (this follow-up).
+Both are real, non-contradictory findings about the SAME heads — the
+apparent "inversion" is a property of single-head causal attribution in a
+redundant network, not evidence that attention-weight correlation is
+generally uninformative about the network's use of structural information.
+The correlational ranking IS informative about which heads jointly matter;
+it just fails badly as a predictor of any ONE head's marginal/individual
+importance in isolation.
+
+Full numbers: `src/l38/l48_multihead_redundancy_out.json`.

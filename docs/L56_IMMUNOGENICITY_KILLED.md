@@ -1,0 +1,114 @@
+# L56 — Immunogenicity Reduction Steering: KILLED at the proxy gate
+
+**Status: KILL, before any model run.** No `l56_immunogenicity_steering.py` and
+no `l56_run_repro.py` exist. That is the intended outcome, not missing work.
+
+Runnable check: `python3 -m src.l38.l56_immunogenicity_proxy_validation`
+(asserts the KILL still reproduces; fails loudly if it stops holding).
+
+## What this was supposed to be
+
+The fourth attempt to extend L42's validated activation-steering harness to a
+NEW target property — steering ESM2-650M to generate *less* immunogenic
+(deimmunized) sequences. Prior new-property attempts: kinase function (failed),
+solubility (L43, AMBIGUOUS), aggregation (L51, proxy validated at r=+0.20),
+disorder (L55, proxy validated at r=+0.449).
+
+## Why it was killed
+
+Per L50 criterion 4, the scoring proxy must be validated against real labels
+**before** the run. This is the L43 lesson: GRAVY was found to correlate
+r=-0.03 with real solubility labels only *after* the entire experiment had run.
+Here the gate was applied first, and it failed.
+
+Six proxies were tested against four tiers of real label, each closer to the
+true endpoint than the last. The tiers matter — the result reverses between them.
+
+| tier | label | n | best proxy | best r (test) |
+|---|---|---|---|---|
+| 1 | peptide MHC-II **binding affinity** (surrogate) | 15,362 | comp. linear | **+0.427** |
+| 2 | peptide **presentation** (mass-spec eluted ligand) | 6.2M | motif_core_mean | +0.037 (AUC 0.560) |
+| 3 | peptide **T-cell response** (real endpoint) | 29,258 | comp. linear | **+0.100** |
+| 4 | **full-length antigens** (pipeline's regime) | 1,024 | motifs go *negative* | −0.29 |
+
+Tier 1 looks like a clean PASS — MHC-II's P1 pocket really does prefer bulky
+hydrophobics, strong binders are measurably F/L/A-enriched and G/D-depleted,
+and the signal is not a length confound (partial r=+0.410). **Stopping at
+tier 1 would have produced a confident, wrong go-ahead.** Binding affinity is
+a surrogate; it is necessary but far from sufficient for immunogenicity.
+
+At the real endpoint (tier 3, did a T cell actually respond) every proxy is
+near chance. At full length (tier 4, the regime the steering pipeline actually
+scores) the literature-motif proxies **invert** relative to tier 1.
+
+## The confound that would have been the false positive
+
+One tier-4 result looked genuinely strong: the fitted 20-parameter composition
+model at out-of-fold r=+0.379 (n=1,024, p=2e-36). It is an artifact.
+
+- Source organism alone explains **58.3%** of the label variance (r=0.763).
+- Random 5-fold CV: r=**+0.379**. Organism-grouped 5-fold CV (same model, same
+  data, organism never spans train/test): r=**−0.323**.
+- Mean within-organism correlation: **+0.056**.
+
+The model was learning *which pathogen a protein came from* — a taxonomic
+compositional fingerprint — not immunogenicity. Antigen sets are dominated by a
+few well-studied organisms with very different mean positivity rates
+(*B. pertussis* 0.13 over 372 proteins vs. HHV-6B 0.66 over 49), so composition
+predicts organism, and organism predicts the label.
+
+Independent cross-check, different label type entirely: 800 UniProt curated
+allergens vs. 2,400 length-matched non-allergens — every proxy at chance
+(AUC 0.430–0.541).
+
+## Why this failure was predictable in hindsight
+
+L51 (aggregation) and L55 (disorder) validated because those *are* largely
+compositional biophysical properties of a sequence. Immunogenicity is a
+property of a sequence **relative to a particular host's MHC alleles and T-cell
+repertoire**. The same peptide is immunogenic in one host and tolerated in
+another. No function of the sequence alone can be a faithful scorer — so the
+compositional-proxy approach that worked for the last two targets is
+structurally inapplicable here, not merely underpowered.
+
+Corollary worth carrying forward: a target property is a good fit for this
+harness only if it is intrinsic to the sequence. Check that *before* hunting
+for a proxy.
+
+## Data acquired (real, cached, reusable)
+
+Under `src/l38/data_cache/immunogenicity/`:
+
+- `mhcii_ba.csv` — 125,985 IEDB-derived peptide–allele MHC-II binding
+  measurements, 15,362 unique 13–21mers, 72 HLA-II alleles, continuous
+  1−log50k(IC50). (HuggingFace `O047/MHC-II_BA_Data`)
+- `mhcii_el.csv` — 7.05M mass-spec eluted-ligand rows, binary presentation.
+  (HuggingFace `O047/MHC-II_EL_Data`)
+- `iedb_tcell_mhcii.json` — 200,000 IEDB IQ-API `tcell_search` MHC-II assay
+  records with per-assay Positive/Negative outcome (79,086 / 120,914).
+- `allergen.fasta` / `nonallergen.fasta` — 1,020 UniProt reviewed allergens
+  (KW-0020) + 62,169 non-allergens.
+- `antigen_posfrac_relaxed.csv` + `antigen_seqs.json` — 1,024 full-length
+  antigens (50–400 aa) with an **effort-normalized** label: fraction of that
+  antigen's distinct tested peptides that assayed Positive.
+- `l56_proxy_validation_summary.json` — all numbers above, regenerated by the
+  validation script.
+
+Note on label construction: a raw per-antigen epitope *count* measures how
+hard an antigen was studied, not how immunogenic it is (max in IEDB is 21,175
+for Zika polyprotein). Hence the positive-*fraction* normalization. Also
+rejected: IEDB's `qualitative_measures` field on `antigen_search`, which is a
+deduplicated value list, not per-assay — using it yields a degenerate label
+(every antigen scores exactly 0.800).
+
+## One narrow option deliberately not taken
+
+Run the harness against **peptide-level MHC-II binding affinity** (tier 1,
+where `motif_core_mean9mer` honestly validates at r=+0.368) and claim only
+"steers predicted MHC-II binding," not "reduces immunogenicity." Rejected
+because (a) it silently swaps the target for a surrogate, and (b) 13–21mers
+are the wrong regime for this pipeline: `MASK_FRACTION=0.3` masks ~4 residues
+of a 15mer, and `is_degenerate_sequence` (>25% single AA) already flags **29%
+of the real, unmodified peptides** — the degeneracy filter would dominate any
+result. If someone wants this, it needs a different eval design, not this one
+pointed at shorter sequences.

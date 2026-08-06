@@ -102,6 +102,64 @@ of the effect), not a causal-NECESSITY sweep (does removing/ablating this
 layer's normal computation destroy the all-layers effect) — the two ask
 different questions and only sufficiency was tested.
 
+## Follow-up (2026-08-03): causal necessity sweep, plus a negative control on solubility
+
+Built `src/l38/l45_causal_necessity_sweep.py`: leave-one-out steering (apply
+the 33-layer steering vector to all layers EXCEPT one, per excluded layer)
+against the full-33-layer effect as reference. If excluding a layer causes a
+big drop in the all-layers effect, that layer's normal contribution is
+causally NECESSARY for the full effect, not just sufficient on its own.
+
+**Thermostability: strong convergence with the original sufficiency sweep.**
+Full-33-layer reference effect: 0.0224 (n=58). Sign test on the 33 per-layer
+drops: 27/33 positive (excluding hurts the effect), p=0.0003 — a real,
+broadly distributed necessity signal, matching the sufficiency sweep's own
+"distributed but depth-weighted" characterization rather than contradicting
+it.
+
+Top-5 most necessary layers by drop size: **31 (0.0041, ~3x the next
+layer), 30 (0.0019), 25 (0.0014), 18 (0.0011), 23 (0.0010)** — this is
+**the same set of layers** (31, 30, 25, 18, 23) that L45's original
+sufficiency sweep independently found significant (layers 3, 9, 10, 18, 20,
+22, 23, 24, 25, 30, 31; layer 31 the standout there too). Two structurally
+different tests — "steer this layer alone" and "steer everything except
+this layer" — now agree on the same handful of layers. This is a
+genuinely stronger claim than either sweep alone: layers 31, 30, 25, 18,
+and 23 are both causally sufficient AND causally necessary for
+thermostability steering in ESM2-650M, not just correlated with the effect
+by one method's idiosyncrasy.
+
+**Negative-control check: does the same method produce a coherent signal on
+a known ARTIFACT effect (L43's solubility)?** Applied the identical
+necessity-sweep method to L43's solubility steering vectors, even though
+L43/L43-followup (docs/L43_SOLUBILITY_STEERING.md) established the
+all-layers solubility effect is not real. Result: **the sign test is ALSO
+significant here** (26/33 positive, p=0.0013) — a broadly distributed
+"necessity" signal shows up even for an effect we already know is not a
+genuine thermostability-style causal phenomenon. Top-5 by drop for
+solubility: layers 17, 16, 7, 22, 6 — **almost no overlap with
+thermostability's top-5** (only layer 20/10 appear in both top-10 lists,
+2 of 10), and notably does NOT show the same late-layer (30-31)
+concentration.
+
+**What this means for interpreting the thermostability result:** the sign
+test alone (broadly-positive necessity skew) is not sufficient evidence of
+a real effect — it fires on a known-artifact case too. What IS
+discriminating is the SPECIFIC layer identity and the late-layer
+concentration: thermostability's necessity ranking reproduces the
+sufficiency sweep's late-layer story almost exactly, while solubility's
+necessity ranking is a different, mid-layer-weighted set with no such
+cross-method agreement. The thermostability finding is strengthened by this
+follow-up (two independent methods now converge on the same 5 layers); the
+solubility null is unchanged, but this is a useful methodological lesson:
+a positive-skewed sign test on its own is a weak signal, and cross-method
+layer-identity agreement (not just "is there *a* pattern") is what
+distinguishes a real localized effect from an artifact that also happens to
+be layer-distributed.
+
+Full numbers: `src/l38/l45_necessity_sweep_thermostability_out.json`,
+`src/l38/l45_necessity_sweep_solubility_out.json`.
+
 ## Cost
 
 Reused L42's exact model, data, and vectors. Runtime: two full 60-sequence
